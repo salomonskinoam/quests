@@ -1,0 +1,181 @@
+import { memo, useState } from 'react';
+import { Pencil } from 'lucide-react';
+import type { DragEvent } from 'react';
+
+import ChatDotMark from '@/shared/hooks/ChatDotMark';
+import { type ChatDot } from '@/shared/hooks/useLiveChats';
+import { cn } from '@/shared/utils';
+import { KindSign, RenameDialog, TabContextMenu, useChatLook } from '@/modules/queue';
+import { planNameOf, ticketOf, workOf, NEW_CHAT_TAB } from '@/shared/hooks/useSplitPane';
+import { TAB_DRAG_TYPE } from '@/modules/project-workspace/tabDrag';
+
+type PaneTabsProps = {
+  ids: string[];
+  activeId: string | null;
+  nameOf: (id: string) => string;
+  onSelect: (id: string) => void;
+  onClose: (id: string) => void;
+  /** Closes the whole pane; shown at the right end of the row when given. */
+  onClosePane?: () => void;
+  dotOf: (id: string) => ChatDot | null;
+  /** A tab (from this row or the other pane's) was dropped here, before `beforeId` (null: at the end). */
+  onDropTab: (id: string, beforeId: string | null) => void;
+  /** Opens a new empty chat: the "+" tab, or a double-click on the empty part of the row. */
+  onNewChat: () => void;
+};
+
+/**
+ * quests: one row of chat tabs above a pane, like an editor's tab bar. Tabs drag: onto a tab (left half:
+ * before it, right half: after it) or onto the empty end of a row, in this pane or the other one. A tab whose
+ * chat is in the priority queue wears its family's color, its kind's sign and the shared hover.
+ */
+function PaneTabs({ ids, activeId, nameOf, onSelect, onClose, onClosePane, dotOf, onDropTab, onNewChat }: PaneTabsProps) {
+  // quests: a right-click on a tab opens the chat's options of its list line (pin, send to the end, hide, Cursor, close the ticket).
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+  // quests: the pencil on the active tab renames the chat (requirement 48: a visible button, not only the menu).
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const isChatTab = (id: string) => id !== NEW_CHAT_TAB && !planNameOf(id) && !workOf(id) && ticketOf(id) === null;
+  // Where a dragged tab would land: before this id, or null for the end of the row; undefined while no drag.
+  const [dropBefore, setDropBefore] = useState<string | null | undefined>(undefined);
+  const lookOf = useChatLook();
+
+  const targetOf = (event: DragEvent<HTMLElement>, id: string): string | null => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (event.clientX < rect.left + rect.width / 2) {
+      return id;
+    }
+    return ids[ids.indexOf(id) + 1] ?? null;
+  };
+  const allowDrop = (event: DragEvent<HTMLElement>, before: string | null) => {
+    if (!event.dataTransfer.types.includes(TAB_DRAG_TYPE)) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setDropBefore(before);
+  };
+  const drop = (event: DragEvent<HTMLElement>, before: string | null) => {
+    const id = event.dataTransfer.getData(TAB_DRAG_TYPE);
+    setDropBefore(undefined);
+    if (!id) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (id !== before) {
+      onDropTab(id, before);
+    }
+  };
+
+  return (
+    <div
+      data-quests-tabs="row"
+      className={cn(
+        'flex h-10 flex-shrink-0 items-stretch overflow-x-auto border-b border-border bg-muted/30',
+        dropBefore === null && 'shadow-[inset_-2px_0_0_0_#3794ff]',
+      )}
+      onDragOver={(event) => allowDrop(event, null)}
+      onDragLeave={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          setDropBefore(undefined);
+        }
+      }}
+      onDrop={(event) => drop(event, null)}
+      // Double-click on the empty part of the row (not on a tab): a new empty chat.
+      onDoubleClick={(event) => { if (event.target === event.currentTarget) onNewChat(); }}
+    >
+      {ids.map((id) => {
+        const dot = dotOf(id);
+        const look = lookOf(id);
+        return (
+          <div
+            key={id}
+            data-tab-id={id}
+            draggable
+            onDragStart={(event) => {
+              event.dataTransfer.setData(TAB_DRAG_TYPE, id);
+              event.dataTransfer.effectAllowed = 'move';
+            }}
+            onDragEnd={() => setDropBefore(undefined)}
+            onDragOver={(event) => allowDrop(event, targetOf(event, id))}
+            onDrop={(event) => drop(event, targetOf(event, id))}
+            className={cn(
+              'group flex min-w-0 max-w-[220px] cursor-pointer items-center gap-1 pl-3 pr-1 text-sm',
+              // The active tab bulges above the others (full height, the rest start lower) and wears a blue frame
+              // with Cursor's red bottom edge (workbench.colorCustomizations: tab.activeBackground, tab.activeBorder).
+              id === activeId
+                ? cn('z-10 rounded-t-md border-2 border-[#3794ff] border-b-[#ff0000] font-bold text-white', !look && 'bg-[#3d5984]')
+                : cn('mt-2 border-r border-border/60 text-[#dddddd]', look ? 'hover:brightness-125' : 'hover:bg-muted/50'),
+              look?.hoverClass,
+              // The landing spot of a dragged tab: a blue line on this tab's left edge.
+              dropBefore === id && 'shadow-[inset_2px_0_0_0_#3794ff]',
+            )}
+            title={nameOf(id)}
+            style={look ? { backgroundColor: look.color } : undefined}
+            onMouseEnter={look?.onMouseEnter}
+            onMouseLeave={look?.onMouseLeave}
+            onClick={() => onSelect(id)}
+            onAuxClick={(event) => event.button === 1 && onClose(id)}
+            onContextMenu={(event) => { event.preventDefault(); setMenu({ id, x: event.clientX, y: event.clientY }); }}
+          >
+            {dot && (
+              <ChatDotMark dot={dot} className="h-2 w-2" />
+            )}
+            {look && look.kind !== 'chat' && <KindSign kind={look.kind} />}
+            <span className="truncate">{nameOf(id)}</span>
+            {id === activeId && isChatTab(id) && (
+              <button
+                type="button"
+                title="Rename"
+                data-quests-tab="rename"
+                className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-[#dddddd]/70 hover:bg-muted hover:text-white"
+                onClick={(event) => { event.stopPropagation(); setRenaming(id); }}
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+            )}
+            <button
+              type="button"
+              title="Close tab"
+              className={cn(
+                'flex h-5 w-5 flex-shrink-0 items-center justify-center rounded hover:bg-muted',
+                id === activeId ? 'opacity-100' : 'opacity-0 group-hover:opacity-100',
+              )}
+              onClick={(event) => {
+                event.stopPropagation();
+                onClose(id);
+              }}
+            >
+              ×
+            </button>
+          </div>
+        );
+      })}
+      <button
+        type="button"
+        title="New chat"
+        data-quests-tab="new"
+        className="flex w-9 flex-shrink-0 items-center justify-center text-[16px] text-[#dddddd] hover:bg-muted/50"
+        onClick={onNewChat}
+      >
+        +
+      </button>
+      {onClosePane && (
+        <button
+          type="button"
+          title="Close the right pane"
+          className="ml-auto flex w-9 flex-shrink-0 items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground"
+          onClick={onClosePane}
+        >
+          ×
+        </button>
+      )}
+      {menu && (
+        <TabContextMenu sessionId={menu.id} x={menu.x} y={menu.y} onClose={() => setMenu(null)} onCloseTab={() => onClose(menu.id)} />
+      )}
+      {renaming && <RenameDialog sessionId={renaming} current={nameOf(renaming)} onDone={() => setRenaming(null)} />}
+    </div>
+  );
+}
+
+export default memo(PaneTabs);

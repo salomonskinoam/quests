@@ -1,0 +1,239 @@
+import { memo, useEffect, useMemo, useState } from 'react';
+import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, SquareArrowOutUpRight } from 'lucide-react';
+
+import type { DiffLine, LiveTaskStatus, Project, SubagentActivity, SubagentInfo, ToolResult } from '@/shared/types';
+import { cn } from '@/shared/utils';
+import { SubagentTimeline } from '@/modules/chat/tools/SubagentTimeline';
+import { useIsExportingTranscript } from '@/modules/chat/context/TranscriptRenderContext';
+import { useRowOpen } from '@/modules/chat/ledger/rowOpen';
+import { MarkdownContent } from '@/modules/chat/tools/ContentRenderers/MarkdownContent';
+import { formatTaskDuration, resolveBackgroundTaskStatus } from '@/modules/chat/utils/backgroundTasks';
+import { agentRef, openWorkTab, sessionIdFromUrl } from '@/modules/chat/work/workTabs';
+
+type SubagentPanelProps = {
+  /** quests: the id of the tool call this card stands for; its open state is kept under `card:<id>` (requirement 52). */
+  toolId?: string;
+  /** Raw tool input of the call that spawned the agent, used for the prompt. */
+  toolInput: unknown;
+  toolResult?: ToolResult | null;
+  subagent?: SubagentInfo;
+  /** The latest live word on a background agent, from the run's task events. */
+  taskStatus?: LiveTaskStatus;
+  activity?: SubagentActivity[];
+  onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
+  createDiff: (oldStr: string, newStr: string) => DiffLine[];
+  selectedProject?: Project | null;
+};
+
+function parseToolInput(toolInput: unknown): Record<string, unknown> {
+  if (typeof toolInput !== 'string') {
+    return (toolInput as Record<string, unknown>) || {};
+  }
+  try {
+    return JSON.parse(toolInput) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Unwraps the block-array shape agent results sometimes arrive in
+ * (`[{ type: 'text', text }]`) so the answer renders as markdown rather than
+ * as JSON.
+ */
+function readResultText(content: unknown): string {
+  if (Array.isArray(content)) {
+    return content
+      .filter((part) => typeof part === 'object' && part !== null && (part as { type?: string }).type === 'text')
+      .map((part) => String((part as { text?: string }).text ?? ''))
+      .join('\n\n');
+  }
+
+  const text = typeof content === 'string' ? content : content == null ? '' : JSON.stringify(content);
+  const trimmed = text.trim();
+  if (trimmed.startsWith('[')) {
+    try {
+      return readResultText(JSON.parse(trimmed));
+    } catch {
+      return text;
+    }
+  }
+  return text;
+}
+
+const STATUS_STYLES: Record<SubagentInfo['status'], string> = {
+  running: 'text-purple-600 dark:text-purple-300',
+  completed: 'text-muted-foreground',
+  failed: 'text-red-600 dark:text-red-400',
+  stopped: 'text-muted-foreground/70',
+};
+
+/**
+ * Rendered by chat's MessageComponent for any tool call that spawned a
+ * subagent — Claude's `Agent`/`Task` and Codex's `spawn_agent` both normalize
+ * to the same shape, so both render through this one panel.
+ *
+ * The timeline is mounted only while the panel is open. The shared Collapsible
+ * keeps its children mounted when closed, which for an agent that ran a
+ * hundred tools would mean a hundred tool renderers on a collapsed row.
+ */
+export const SubagentPanel = memo(({
+  toolInput,
+  toolResult,
+  toolId,
+  subagent,
+  taskStatus,
+  activity,
+  onFileOpen,
+  createDiff,
+  selectedProject,
+}: SubagentPanelProps) => {
+  // Collapsed by default: an agent is a summary of work, and its detail is
+  // only wanted on demand.
+  const isExporting = useIsExportingTranscript();
+  const [isOpen, toggleOpen] = useRowOpen(`card:${toolId ?? subagent?.id ?? ''}`);
+  const showTimeline = isOpen || isExporting;
+
+  const parsedInput = useMemo(() => parseToolInput(toolInput), [toolInput]);
+  const resultText = useMemo(() => readResultText(toolResult?.content), [toolResult?.content]);
+
+  const entries = activity ?? [];
+  // A background agent's tool result is only its launch acknowledgement — the
+  // real answer arrives later as a task notification — so its arrival says
+  // nothing about whether the agent finished. Treating it as an outcome marked
+  // every background agent `completed` a second after it launched, which is
+  // where the spinner went. Until the server reports one on `subagent` or the
+  // live stream's task events say otherwise, an async launch is still
+  // outstanding.
+  const isAsyncAgentLaunch = Boolean(
+    (toolResult?.toolUseResult as { isAsync?: boolean } | undefined)?.isAsync,
+  );
+  const status = resolveBackgroundTaskStatus(subagent?.status, taskStatus?.status)
+    ?? (toolResult && !isAsyncAgentLaunch ? 'completed' : 'running');
+  const toolCount = entries.filter((entry) => entry.kind === 'tool').length;
+  // Claude names its agent presets (Explore, Plan); Codex has none, so the
+  // neutral label carries and the assigned nickname shows alongside it.
+  const label = subagent?.type ?? String(parsedInput.subagent_type ?? '');
+  const nickname = subagent?.name && subagent.name !== subagent.type ? subagent.name : '';
+  const description = subagent?.description ?? String(parsedInput.description ?? '');
+  const prompt = String(parsedInput.prompt ?? '');
+
+  // quests: the live summary, as Cursor's panel shows it: the agent's last step, its tokens, its tool count and
+  // its time, ticking every second while it runs. The figures come from the agent's own transcript (history
+  // load, also for a chat run in Cursor) or from the run's task events (a chat run by the page).
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (status !== 'running') return undefined;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [status]);
+  const usage = taskStatus?.usage ?? subagent?.usage;
+  const tokens = usage?.totalTokens ?? 0;
+  const toolsUsed = usage?.toolUses ?? toolCount;
+  const elapsedMs = status === 'running' && subagent?.startedAt ? Math.max(0, now - Date.parse(subagent.startedAt)) : usage?.durationMs ?? 0;
+  const figures = usage
+    ? [`${tokens >= 1000 ? `${(tokens / 1000).toFixed(1)}k` : tokens} tokens`, `${toolsUsed} ${toolsUsed === 1 ? 'tool' : 'tools'}`, formatTaskDuration(elapsedMs)].join(' · ')
+    : '';
+  const lastStep = status === 'running' ? taskStatus?.summary ?? subagent?.lastStep ?? '' : '';
+  // quests: the agent opens as its own tab (its transcript, live), beside the chat.
+  const agentId = subagent?.id ?? taskStatus?.taskId ?? (toolResult?.toolUseResult as { agentId?: unknown } | undefined)?.agentId;
+  const openTab = typeof agentId === 'string' && agentId && !isExporting
+    ? () => { const sid = sessionIdFromUrl(); if (sid) openWorkTab(sid, 'agent', agentRef(sid, agentId), `Agent: ${description || label || 'agent'}`); }
+    : null;
+
+  return (
+    <div className="my-1 border-l-2 border-l-purple-500 py-0.5 pl-3 dark:border-l-purple-400">
+      <div className="flex items-center gap-1">
+      <button
+        type="button"
+        aria-expanded={isOpen}
+        onClick={toggleOpen}
+        className="flex w-full min-w-0 select-none items-center gap-1.5 py-0.5 text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <ChevronRight className={cn('h-3 w-3 flex-shrink-0 transition-transform duration-150', isOpen && 'rotate-90')} />
+        <Bot className="h-3.5 w-3.5 flex-shrink-0 text-purple-500 dark:text-purple-400" />
+        <span className="flex-shrink-0 font-medium text-foreground">{label || 'Agent'}</span>
+        {description && (
+          <>
+            <span className="flex-shrink-0 text-[10px] text-muted-foreground/40">/</span>
+            <span className="min-w-0 flex-1 truncate">{description}</span>
+          </>
+        )}
+        {nickname && (
+          <span className="flex-shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground/70">{nickname}</span>
+        )}
+        {lastStep && (
+          <span data-quests-subagent="step" className="min-w-0 max-w-[40%] truncate text-[11px] text-muted-foreground/80" title={lastStep}>· {lastStep}</span>
+        )}
+        <span data-quests-subagent="figures" className={cn('ml-auto flex flex-shrink-0 items-center gap-1 text-[11px]', STATUS_STYLES[status])}>
+          {status === 'running' ? (
+            <>
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-purple-500 dark:bg-purple-400" />
+              {figures || 'running'}
+            </>
+          ) : status === 'failed' ? (
+            <>
+              <CircleAlert className="h-3 w-3" />
+              failed
+            </>
+          ) : status === 'stopped' ? (
+            // Neither a spinner nor a check mark: the agent never reported and
+            // the process it ran in is gone, so there is no outcome to draw.
+            <span title="The run ended before this agent reported back" className="flex items-center gap-1">
+              <CircleDashed className="h-3 w-3" />
+              no result
+            </span>
+          ) : (
+            <>
+              <CircleCheck className="h-3 w-3" />
+              {figures || (toolCount > 0 ? `${toolCount} ${toolCount === 1 ? 'tool' : 'tools'}` : 'done')}
+            </>
+          )}
+        </span>
+      </button>
+      {openTab && (
+        <button
+          type="button"
+          data-quests-work="open-agent"
+          title="Open this agent as a tab"
+          onClick={openTab}
+          className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded text-muted-foreground/60 hover:bg-muted hover:text-foreground"
+        >
+          <SquareArrowOutUpRight className="h-3 w-3" />
+        </button>
+      )}
+      </div>
+
+      {showTimeline && (
+        <div className="mt-1.5 space-y-2 pl-[18px]">
+          {subagent?.model && (
+            <div className="text-[10px] uppercase tracking-wide text-muted-foreground/50">{subagent.model}</div>
+          )}
+
+          {prompt && (
+            <div className="rounded border border-border/40 bg-muted/40 p-2 text-xs text-muted-foreground">
+              <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground/60">Task</div>
+              <div className="line-clamp-6 whitespace-pre-wrap break-words">{prompt}</div>
+            </div>
+          )}
+
+          <SubagentTimeline
+            activity={entries}
+            activityCount={subagent?.activityCount}
+            onFileOpen={onFileOpen}
+            createDiff={createDiff}
+            selectedProject={selectedProject}
+          />
+
+          {resultText && (
+            <div className="rounded border border-border/40 bg-muted/30 p-2">
+              <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground/60">Result</div>
+              <MarkdownContent content={resultText} className="prose prose-sm max-w-none dark:prose-invert" />
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
+SubagentPanel.displayName = 'SubagentPanel';

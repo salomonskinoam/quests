@@ -1,0 +1,99 @@
+import { chatsIn } from '@/modules/queue/chats.js';
+import { place, type Where } from '@/modules/queue/placement.js';
+import { buildEntries, type QueueEntry } from '@/modules/queue/entries.js';
+import { readLatch, readOrder, writeLatch, writeOrder } from '@/modules/queue/order-store.js';
+import { drag, lift, repair, view } from '@/modules/queue/queue-order.js';
+import { setPageTabs } from '@/modules/queue/sources/page-tabs.js';
+import { noteTranscript, noteTranscriptOnce } from '@/modules/queue/sources/transcripts.js';
+import { refreshLive } from '@/modules/queue/sources/live.js';
+import { refreshRuntimeState } from '@/shared/runtime-state.js';
+import { queueDb } from '@/modules/database/index.js';
+import { notePageClaim } from '@/modules/queue/page-claims.js';
+import { getTicketGroups, setTicketGroups, type TicketGroup } from '@/modules/queue/ticket-groups.js';
+
+/** quests priority queue: what the page asks of the queue. Each call answers with the whole queue. */
+
+export type Queue = { entries: QueueEntry[]; order: string[]; latch: string | null; view: string[]; ticketGroups: TicketGroup[] };
+
+export function getQueue(): Queue {
+  const entries = buildEntries();
+  const order = repair(readOrder(), entries);
+  writeOrder(order);
+  const stored = readLatch();
+  const latch = stored && entries.some((e) => e.key === stored) ? stored : null;
+  return { entries, order, latch, view: view(order, latch, entries), ticketGroups: getTicketGroups() };
+}
+
+/** Noam's groups of unclaimed tickets, the whole list. */
+export function replaceTicketGroups(groups: unknown): Queue {
+  setTicketGroups(groups);
+  return getQueue();
+}
+
+export function setOrder(order: string[]): Queue {
+  writeOrder(repair(order, buildEntries()));
+  return getQueue();
+}
+
+/** Drag `key` to stand before `beforeKey` (null: last); its family block comes along as the rules require. */
+export function dragTo(key: string, beforeKey: string | null): Queue {
+  const entries = buildEntries();
+  writeOrder(drag(repair(readOrder(), entries), entries, key, beforeKey));
+  return getQueue();
+}
+
+export function setLatch(key: string | null): Queue {
+  writeLatch(key);
+  return getQueue();
+}
+
+/**
+ * A drawer button: the entry goes to that place. The queue's button always puts it at the end of the queue
+ * (Noam, 3 Nov: "the send to end of queue always send to ... the end of the queue").
+ */
+export function placeEntry(key: string, where: Where): Queue {
+  const entries = buildEntries();
+  const entry = entries.find((e) => e.key === key);
+  if (!entry) return getQueue();
+  place(key, where, entry.replyAt ?? 'none');
+  if (where === 'queue') writeOrder(drag(repair(readOrder(), entries), entries, key, null));
+  return getQueue();
+}
+
+/** A page window reports its tabs; a chat the queue never read gets its transcript read now, for its name and state. */
+export function reportPageTabs(windowId: string, pageSessionIds: string[]): Queue {
+  setPageTabs(windowId, pageSessionIds);
+  for (const c of chatsIn('page')) if (c.transcriptPath) noteTranscriptOnce(c.sid, c.transcriptPath);
+  return getQueue();
+}
+
+/**
+ * "Sync from Cursor": the chats open in Cursor jump to the top, in Cursor's tab order, and the latch is released
+ * so nothing sits above them. Answers their page session ids too: the page opens them as its tabs.
+ */
+export function syncFromCursor(): Queue & { cursorSessionIds: string[] } {
+  const entries = buildEntries();
+  const synced = chatsIn('cursor')
+    .map((c) => entries.find((e) => e.providerSessionId === c.sid))
+    .filter((e): e is QueueEntry => Boolean(e));
+  writeOrder(lift(repair(readOrder(), entries), entries, synced.map((e) => e.key)));
+  writeLatch(null);
+  return { ...getQueue(), cursorSessionIds: synced.map((e) => e.sessionId).filter((id): id is string => Boolean(id)) };
+}
+
+/** A chat started from a ticket's tab: the queue counts it as the ticket's claim at once (page-claims.ts). */
+export function claimFromPage(number: number, sessionId: string): Queue {
+  notePageClaim(number, sessionId);
+  return getQueue();
+}
+
+/**
+ * A chat's turn just ended (the page heard it): its transcript and the live processes are read now, not at the
+ * next file event or poll, and the queue answers with the chat in its new place. `sessionId` is the page's id.
+ */
+export async function settleChat(sessionId: string): Promise<Queue> {
+  const row = queueDb.listClaudeSessions().find((s) => s.session_id === sessionId || s.provider_session_id === sessionId);
+  await Promise.all([refreshLive(), refreshRuntimeState()]);
+  if (row?.jsonl_path) await noteTranscript(row.jsonl_path);
+  return getQueue();
+}

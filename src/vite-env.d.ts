@@ -1,0 +1,11 @@
+/// <reference types="vite/client" />
+
+/**
+ * Installed package version, injected by Vite's `define` at build time.
+ * Read it through `APP_VERSION` in `@/shared/constants`, which also covers
+ * runners such as `tsx` that do not apply Vite's define replacement.
+ */
+declare const __APP_VERSION__: string;
+
+/** quests: our version on top of __APP_VERSION__ (our commits not in upstream, plus the commit), from vite.config.js. */
+declare const __QUESTS_VERSION__: string;

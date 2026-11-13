@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Quests IDE
+Comment=The quests page in its own Firefox window
+Exec=firefox --new-instance -P quests-ide --class QuestsIDE --name QuestsIDE http://localhost:3001
+Icon=QUESTS_CHECKOUT/public/quests-favicon.svg
+StartupWMClass=QuestsIDE
+Terminal=false
+Categories=Development;

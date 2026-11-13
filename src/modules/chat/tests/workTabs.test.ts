@@ -1,0 +1,36 @@
+import assert from 'node:assert/strict';
+
+import { test } from 'vitest';
+
+import { workOf, workTabId } from '@/shared/hooks/useSplitPane';
+import { agentRef, monitoredFileOf, outputFileOf, outputRef, setWorkTitle, taskRef } from '@/modules/chat/work/workTabs';
+
+test('quests: a work tab id round-trips its kind and ref, slashes included', () => {
+  const agent = workTabId('agent', agentRef('8ade61bb-1', 'a3f9'));
+  assert.deepEqual(workOf(agent), { kind: 'agent', ref: '8ade61bb-1/a3f9' });
+  const file = '/tmp/claude-1000/-home-user-src-app/1a2b3c4d-1111-4222-8333-444455556666/tasks/bwy06286r.output';
+  const output = workTabId('output', outputRef(file));
+  assert.deepEqual(workOf(output), { kind: 'output', ref: file.slice(1) });
+  assert.deepEqual(workOf(workTabId('task', taskRef('8ade61bb-1', 'bplomq0l1'))), { kind: 'task', ref: '8ade61bb-1/bplomq0l1' });
+  assert.equal(workOf('plan:x'), null);
+  assert.equal(workOf('8ade61bb-1'), null);
+});
+
+test('quests: the output file comes from the live task event, else from the launch result', () => {
+  const file = '/tmp/claude-1000/-p/1a2b3c4d-1111-4222-8333-444455556666/tasks/bwy06286r.output';
+  assert.equal(outputFileOf({ taskStatus: { status: 'running', outputFile: file }, toolResult: null }), file);
+  assert.equal(outputFileOf({ toolResult: { content: `Command running in background with ID: x\n<output-file>${file}</output-file>` } as never }), file);
+  assert.equal(outputFileOf({ toolResult: { content: 'done' } as never }), undefined);
+});
+
+test('quests: a watcher opens the file it tails', () => {
+  const input = JSON.stringify({ command: 'cd /home/user/src/x && tail -n 0 -f /tmp/claude-1a2b3c4d/watch_all.log /tmp/claude-1a2b3c4d/w2.log', description: 'nightly runs' });
+  assert.equal(monitoredFileOf({ toolName: 'Monitor', toolInput: input }), '/tmp/claude-1a2b3c4d/watch_all.log');
+  assert.equal(monitoredFileOf({ toolName: 'Monitor', toolInput: JSON.stringify({ command: 'python watch.py' }) }), undefined);
+  assert.equal(monitoredFileOf({ toolName: 'Bash', toolInput: input }), undefined);
+});
+
+test('quests: a work tab title is kept per tab id', () => {
+  setWorkTitle('work:agent:s/a', 'Agent: survey the repo');
+  assert.equal(JSON.parse(localStorage.getItem('quests-work-titles') ?? '{}')['work:agent:s/a'], 'Agent: survey the repo');
+});

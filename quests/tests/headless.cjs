@@ -1,0 +1,1330 @@
+// quests: headless checks of the running page (http://127.0.0.1:3001), in Chrome via playwright-core.
+// Read-only: opens one chat, never types in it. Logs in with a 10-minute token signed by the app's own secret.
+//
+//   node quests/tests/headless.cjs <check> <sessionId>
+//
+//   live    every 2 s for 60 s: the last message's time and text (run while the chat is working in Cursor:
+//           it must change within a few seconds of each step)
+//   pin     scroll to six positions; the pinned user message must show text at each
+//   bottom  scroll to the bottom and watch 18 s: must stay 0 px from the bottom, no endless loading
+//   scroll  fast scroll up, 1500 px every 60 ms, to the top: a reference row must move exactly 1500 px each
+//           step, also on steps where older history lands (prints jumps; [] means none)
+//   plan    <sessionId> is a plan name here (~/.claude/plans/<name>.md): opens a chat tab, then the plan tab placed
+//           right after it, and prints the left tab order, the URL and the start of the rendered plan
+//   mode    the permission mode button: start mode, after Shift+Tab, after plain Tab (must not change)
+//   queue   the session list: its lines must equal the queue's view from GET /api/quests/queue, one background
+//           color per family, no CloudCLI logo in the header
+//   drag    drags the first root line onto the last line (its family follows as the rules say), then drags another
+//           and releases it outside the list (the order must not change); puts the first root back at the end
+//   ledger  the rows by id now and after 90 s of the chat working: nothing missing, nothing moved, nothing twice,
+//           new rows only at the ends (requirement 52: the view draws the transcript)
+//   reload  rows, open tool lines and folds before and after a page reload: all the same (open state is cached)
+//   planedit <plan name>: the plan tab's Edit holds the file's text, Cancel goes back (nothing saved)
+//   modecolors Shift+Tab through every mode and back to the start: each mode's name, text color and background
+//           color on the mode button (the text must be readable in every mode)
+//   back    Back is disabled at start; Next opens the next chat and enables Back; Back returns, is disabled again,
+//           and the opened chat's line has the dot and blink it had before Next
+//   mention "@" plus QUERY in the input box: the files the dropdown lists (the box is emptied after)
+//   preload after a reload, the other open tab is built in the background; ms per switch (click to 2nd frame)
+//   names   every open tab whose chat has a line in the list shows the same name as that line
+//   summary the Summary drawer beside the shown chat: closed at start; a click on its strip opens it with the last
+//           Summary (or the last reply's closing lines); a second click closes it (requirement 107)
+//   tabs    sets a layout (left: <sessionId> + the 2 next chats, right: 1 more), drags tabs between and within
+//           panes, prints the stored layout after each drag. Restores no layout: use a fresh browser profile.
+const os = require('node:os');
+const path = require('node:path');
+const { chromium } = require('playwright-core');
+const jwt = require('jsonwebtoken');
+const Database = require('better-sqlite3');
+
+const [check, sessionId] = process.argv.slice(2);
+if (!['live', 'pin', 'bottom', 'scroll', 'tabs', 'mode', 'plan', 'queue', 'drag', 'next', 'latch', 'readonly', 'forest', 'ticketchat', 'tabhover', 'newtab', 'synccursor', 'dropline', 'split', 'colors', 'groups', 'dragtop', 'focus', 'subagents', 'livescroll', 'planwait', 'typejump', 'join', 'worktab', 'dupes', 'folds', 'peek', 'runners', 'empties', 'workers', 'tailrows', 'tabmenu', 'lasttab', 'textscale', 'renamebutton', 'ledger', 'reload', 'hold', 'archived', 'dragunclaimed', 'ticketgroups', 'switch', 'search', 'place', 'back', 'planedit', 'modecolors', 'names', 'preload', 'mention', 'summary'].includes(check) || !sessionId) {
+  console.error('usage: node quests/tests/headless.cjs live|pin|bottom|scroll|tabs|mode|plan|queue|drag|next|latch|readonly|forest|ticketchat|tabhover|newtab|synccursor|dropline|split|colors|groups <sessionId>');
+  process.exit(2);
+}
+const secret = new Database(path.join(os.homedir(), '.cloudcli', 'auth.db'), { readonly: true })
+  .prepare("select value from app_config where key like '%jwt%'").get().value;
+const token = jwt.sign({ userId: 1, username: os.userInfo().username }, secret, { expiresIn: 600 });
+
+(async () => {
+  const browser = await chromium.launch({ executablePath: process.env.CHROME || '/opt/google/chrome/chrome', headless: true, args: ['--disable-smooth-scrolling'] });
+  const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
+  await page.addInitScript((t) => localStorage.setItem('auth-token', t), token);
+  // The list's default (focus) shows only the chats that wait for the user; every check but `focus` reads the
+  // whole list, so they open the page in archive mode.
+  await page.addInitScript((mode) => localStorage.setItem('quests-queue-mode', mode), ['focus', 'hold', 'archived', 'dragunclaimed', 'ticketgroups', 'ticketchat', 'switch', 'search', 'place'].includes(check) ? 'focus' : 'archive');
+  page.on('pageerror', (error) => console.log('page error:', (error.stack || error.message).slice(0, 700)));
+  await page.goto(check === 'plan' ? 'http://127.0.0.1:3001/' : `http://127.0.0.1:3001/session/${sessionId}`);
+  await page.waitForTimeout(6000);
+  const pane = page.locator('[data-chat-view="shown"] .chat-messages-pane');
+
+  if (check === 'live') {
+    let previous = '';
+    for (let i = 0; i < 30; i++) {
+      const last = await pane.evaluate((p) => {
+        const rows = p.querySelectorAll('[data-message-timestamp]');
+        const row = rows[rows.length - 1];
+        return row ? `${row.dataset.messageTimestamp} | ${row.textContent.replace(/\s+/g, ' ').slice(0, 60)}` : '';
+      });
+      if (last !== previous) console.log(new Date().toISOString().slice(11, 19), last);
+      previous = last;
+      await page.waitForTimeout(2000);
+    }
+  }
+
+  if (check === 'pin') {
+    for (const f of [0.15, 0.35, 0.55, 0.75, 0.9, 0.05]) {
+      await pane.evaluate((p, y) => { p.scrollTop = y; }, Math.round((await pane.evaluate((p) => p.scrollHeight)) * f));
+      await page.waitForTimeout(4000);
+      const pin = await page.evaluate(() => document.querySelector('.quests-sticky-user')?.textContent?.slice(0, 60) ?? '(no pin)');
+      console.log('at', f, 'pin:', JSON.stringify(pin));
+    }
+  }
+
+  if (check === 'bottom') {
+    await pane.evaluate((p) => { p.scrollTop = p.scrollHeight; });
+    let previous = '';
+    for (let i = 0; i < 60; i++) {
+      const s = await pane.evaluate((p) => `gap=${Math.round(p.scrollHeight - p.scrollTop - p.clientHeight)} messages=${p.querySelectorAll('.chat-message').length}`);
+      if (s !== previous) console.log((i * 0.3).toFixed(1) + 's', s);
+      previous = s;
+      if (i === 20) await pane.evaluate((p) => { p.scrollTop = p.scrollHeight; });
+      await page.waitForTimeout(300);
+    }
+  }
+
+  if (check === 'scroll') {
+    // Scrolls with the mouse wheel, as a user does: the 3-screens-ahead preload waits for the user's own
+    // wheel, touch or keys, so setting scrollTop from code would not test it.
+    await pane.evaluate((p) => { p.scrollTop = p.scrollHeight; });
+    await page.waitForTimeout(1500);
+    const box = await pane.boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    const measure = () => pane.evaluate((p) => {
+      const top = p.getBoundingClientRect().top;
+      let marker = p.querySelector('[data-quests-marker]');
+      if (!marker) {
+        marker = Array.from(p.querySelectorAll('.chat-message')).find((m) => m.getBoundingClientRect().top >= top);
+        marker?.setAttribute('data-quests-marker', '');
+      }
+      return { scrollTop: p.scrollTop, markerTop: marker ? marker.getBoundingClientRect().top : 0, count: p.querySelectorAll('.chat-message').length };
+    });
+    const out = { steps: 0, loads: 0, jumps: [] };
+    while (out.steps < 150) {
+      await pane.evaluate((p) => p.querySelector('[data-quests-marker]')?.removeAttribute('data-quests-marker'));
+      const before = await measure();
+      if (before.scrollTop <= 0) break;
+      const want = Math.min(1500, before.scrollTop);
+      await page.mouse.wheel(0, -1500);
+      await page.waitForTimeout(80);
+      const after = await measure();
+      if (after.count !== before.count) out.loads++;
+      if (Math.abs(after.markerTop - before.markerTop - want) > 2) out.jumps.push(Math.round(after.markerTop - before.markerTop - want));
+      out.steps++;
+    }
+    console.log(JSON.stringify(out));
+  }
+
+  if (check === 'tabs') {
+    const others = (await page.evaluate(() => Array.from(document.querySelectorAll('a[href^="/session/"]'))
+      .map((a) => a.getAttribute('href').slice(9)))).filter((id) => id !== sessionId).slice(0, 3);
+    await page.evaluate(([a, b, c, d]) => {
+      localStorage.setItem('quests-panes', JSON.stringify({ left: [a, b, c], right: [d], rightActive: d }));
+      window.dispatchEvent(new Event('quests-panes-change'));
+    }, [sessionId, ...others]);
+    await page.waitForTimeout(3000);
+    const short = (ids) => ids.map((id) => id.slice(0, 4));
+    const layout = async (label) => {
+      const p = await page.evaluate(() => JSON.parse(localStorage.getItem('quests-panes')));
+      console.log(label.padEnd(34), 'left', JSON.stringify(short(p.left)), 'right', JSON.stringify(short(p.right)), 'rightActive', (p.rightActive || '').slice(0, 4), 'url', page.url().split('/').pop().slice(0, 4));
+    };
+    const rows = page.locator('[data-quests-tabs="row"]');
+    await layout('start');
+    await rows.nth(0).locator('[draggable="true"]').nth(1).dragTo(rows.nth(1).locator('[draggable="true"]').nth(0), { targetPosition: { x: 150, y: 10 } });
+    await page.waitForTimeout(1500); await layout('left #2 -> right, after its tab');
+    await rows.nth(0).locator('[draggable="true"]').nth(1).dragTo(rows.nth(0).locator('[draggable="true"]').nth(0), { targetPosition: { x: 5, y: 10 } });
+    await page.waitForTimeout(1500); await layout('left #2 -> before left #1');
+    await rows.nth(1).locator('[draggable="true"]').nth(1).dragTo(rows.nth(0).locator('[draggable="true"]').nth(0), { targetPosition: { x: 5, y: 10 } });
+    await page.waitForTimeout(1500); await layout('right #2 -> before left #1');
+  }
+
+  if (check === 'plan') {
+    const plan = sessionId;
+    await page.waitForSelector('a[href^="/session/"]', { timeout: 20000 });
+    const chats = (await page.evaluate(() => Array.from(document.querySelectorAll('a[href^="/session/"]')).map((a) => a.getAttribute('href').slice(9)))).slice(0, 2);
+    await page.evaluate(([a, b, p]) => {
+      localStorage.setItem('quests-panes', JSON.stringify({ left: [a, b], right: [], rightActive: null }));
+      // the same placement the page does when a chat writes a plan: right after the chat's tab
+      const panes = JSON.parse(localStorage.getItem('quests-panes'));
+      const at = panes.left.indexOf(a);
+      panes.left.splice(at + 1, 0, `plan:${p}`);
+      localStorage.setItem('quests-panes', JSON.stringify(panes));
+    }, [chats[0], chats[1], plan]);
+    await page.goto(`http://127.0.0.1:3001/plan/${plan}`);
+    await page.waitForTimeout(5000);
+    const r = await page.evaluate(() => ({
+      tabs: Array.from(document.querySelectorAll('[data-quests-tabs="row"] > [draggable="true"]')).map((t) => t.textContent.replace('×', '').trim().slice(0, 30)),
+      url: location.pathname,
+      rendered: document.querySelector('.prose h1, .prose h2')?.textContent?.slice(0, 80) ?? null,
+    }));
+    console.log(JSON.stringify(r));
+    if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT });
+  }
+
+  if (check === 'planedit') {
+    // <sessionId> is a plan name. The plan tab's Edit shows the file's text in a text box; Cancel goes back to the
+    // rendered plan. Nothing is saved (Save writes the file).
+    await page.goto(`http://127.0.0.1:3001/plan/${sessionId}`);
+    await page.waitForTimeout(5000);
+    const file = await page.evaluate(async (n) => (await (await fetch(`/api/quests/plan/${n}`, { headers: { Authorization: `Bearer ${localStorage.getItem('auth-token')}` } })).json()).text, sessionId);
+    await page.locator('[data-quests-plan="tab-edit"]').click();
+    const box = await page.locator('[data-quests-plan="tab-text"]').inputValue();
+    await page.getByText('Cancel', { exact: true }).click();
+    const back = await page.locator('[data-quests-plan="tab-text"]').count() === 0 && await page.locator('[data-quests-plan="tab-edit"]').count() === 1;
+    console.log(JSON.stringify({ ok: box === file && back, sameText: box === file, back, chars: box.length }));
+  }
+
+  const apiQueue = () => page.evaluate(async () => (await (await fetch('/api/quests/queue', {
+    headers: { Authorization: `Bearer ${localStorage.getItem('auth-token')}` },
+  })).json()).data);
+  const listRows = () => page.evaluate(() => Array.from(document.querySelectorAll('[data-quests-queue="list"] [data-queue-key]'))
+    .map((r) => ({ key: r.dataset.queueKey, color: r.style.backgroundColor, draggable: r.draggable })));
+
+  if (check === 'queue') {
+    const q = await apiQueue();
+    const rows = await listRows();
+    const roots = new Set(q.entries.map((e) => e.rootKey));
+    const colors = new Set(rows.map((r) => r.color));
+    console.log(JSON.stringify({
+      rowsMatchView: JSON.stringify(rows.map((r) => r.key)) === JSON.stringify(q.view),
+      rows: rows.length, families: roots.size, colors: colors.size,
+      headerLogo: await page.evaluate(() => /CloudCLI/.test(document.querySelector('.md\\:block')?.textContent ?? '')),
+    }));
+    if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT });
+  }
+
+  if (check === 'drag') {
+    // A root with a side quest under it is dragged onto the line after that side quest: the side quest must come
+    // along below it. Then another root is dragged and released outside the list: the order must not change.
+    // The stored order is put back exactly at the end.
+    const before = await apiQueue();
+    const put = (route, body) => page.evaluate(async ([r, b]) => fetch(`/api/quests/queue${r}`, {
+      method: 'PUT', headers: { Authorization: `Bearer ${localStorage.getItem('auth-token')}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(b),
+    }), [route, body]);
+    await page.evaluate(() => {
+      window.__dragged = [];
+      document.addEventListener('dragstart', (e) => window.__dragged.push(e.target.dataset?.queueKey), true);
+    });
+    const mouseDrag = async (fromKey, toLocator, y) => {
+      const from = await page.locator(`[data-queue-key="${fromKey}"]`).boundingBox();
+      const to = await toLocator.boundingBox();
+      await page.mouse.move(from.x + 40, from.y + from.height / 2);
+      await page.mouse.down();
+      for (let i = 1; i <= 8; i++) await page.mouse.move(to.x + 40, from.y + (to.y + y - from.y) * (i / 8));
+      await page.mouse.up();
+      await page.waitForTimeout(2500);
+    };
+    const side = before.entries.find((e) => e.kind === 'sidequest' && e.parentKey && before.view.includes(e.parentKey));
+    const root = side.parentKey;
+    const next = before.view[before.view.indexOf(side.key) + 1];
+    // Aim at the top edge of the line after `next` (or, when `next` is the last line, at its lower half): the root
+    // lands right after `next`, below its own side quest.
+    const afterNext = before.view[before.view.indexOf(side.key) + 2];
+    await mouseDrag(root, page.locator(`[data-queue-key="${afterNext ?? next}"]`), afterNext ? 3 : 22);
+    const after = await apiQueue();
+    const at = (o, k) => o.indexOf(k);
+    console.log(JSON.stringify({
+      picked: await page.evaluate(() => window.__dragged), root, side: side.key, onto: next,
+      before: [at(before.view, root), at(before.view, side.key), at(before.view, next)],
+      after: [at(after.view, root), at(after.view, side.key), at(after.view, next)],
+    }));
+    const second = after.view.find((k) => k !== root && after.entries.find((e) => e.key === k).rootKey === k
+      && after.entries.find((e) => e.key === k).state !== 'permission');
+    await mouseDrag(second, page.locator('[data-chat-view="shown"] .chat-messages-pane'), 200);
+    console.log(JSON.stringify({ releasedOutside: second, unchanged: JSON.stringify((await apiQueue()).order) === JSON.stringify(after.order) }));
+    await put('/order', { order: before.order });
+    console.log(JSON.stringify({ restored: JSON.stringify((await apiQueue()).order) === JSON.stringify(before.order) }));
+  }
+
+  const putLatch = (key) => page.evaluate(async (k) => fetch('/api/quests/queue/latch', {
+    method: 'PUT', headers: { Authorization: `Bearer ${localStorage.getItem('auth-token')}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key: k }),
+  }), key);
+
+  if (check === 'next') {
+    // Alt+Enter with an empty input box brings the next entry that needs the user (nothing is sent).
+    const q = await apiQueue();
+    const current = q.entries.find((e) => e.sessionId === sessionId)?.key;
+    const expected = q.view.find((k) => k !== current && q.entries.find((e) => e.key === k).waitsForMe);
+    await page.locator('[data-chat-view="shown"] [data-slot="prompt-input-textarea"]').first().focus();
+    await page.keyboard.press('Alt+Enter');
+    await page.waitForTimeout(2500);
+    const e = q.entries.find((x) => x.key === expected);
+    // A chat opens; an unclaimed ticket opens its page.
+    const opened = e.sessionId ? await page.evaluate((id) => location.pathname === `/session/${id}`, e.sessionId)
+      : await page.evaluate((n) => location.pathname === `/ticket/${n}`, e.number);
+    console.log(JSON.stringify({ expected, url: await page.evaluate(() => location.pathname), opened }));
+  }
+
+  if (check === 'back') {
+    // "Back" undoes "Next": disabled on a chat no "Next" opened; after "Next" it is enabled, and pressed it opens
+    // the chat "Next" left and gives the chat "Next" opened its orange dot and blink back, if it had them.
+    const q = await apiQueue();
+    const current = q.entries.find((e) => e.sessionId === sessionId)?.key;
+    const to = q.entries.find((e) => e.key === q.view.find((k) => k !== current && q.entries.find((x) => x.key === k).waitsForMe && q.entries.find((x) => x.key === k).sessionId));
+    const look = (key) => page.evaluate((k) => {
+      const line = document.querySelector(`[data-quests-queue="list"] [data-queue-key="${k}"]`);
+      return line ? { orange: Boolean(line.querySelector('[title="Finished, not seen yet"]')), blink: line.className.includes('animate-pulse') } : null;
+    }, key);
+    const back = page.locator('[data-quests-back="button"]').first();
+    const disabledAtStart = await back.isDisabled();
+    const before = await look(to.key);
+    await page.locator('[data-quests-next="button"]').first().click();
+    await page.waitForTimeout(2500);
+    const afterNext = { url: await page.evaluate(() => location.pathname), enabled: !(await back.isDisabled()) };
+    await back.click();
+    await page.waitForTimeout(2500);
+    const afterBack = { url: await page.evaluate(() => location.pathname), enabled: !(await back.isDisabled()), look: await look(to.key) };
+    const ok = disabledAtStart && afterNext.url === `/session/${to.sessionId}` && afterNext.enabled
+      && afterBack.url === `/session/${sessionId}` && !afterBack.enabled
+      && (!before || (afterBack.look && afterBack.look.orange === before.orange && afterBack.look.blink === before.blink));
+    console.log(JSON.stringify({ ok, to: to.key, before, afterNext, afterBack, disabledAtStart }, null, 1));
+  }
+
+  if (check === 'latch') {
+    // The pin is manual only. Click the pin on the chat's line: it is first in the list, above everything, and its
+    // line shows the pin. Click the pin again: unpinned. The user's own pin, if any, is put back at the end.
+    const q = await apiQueue();
+    const mine = q.entries.find((e) => e.sessionId === sessionId);
+    const line = page.locator(`[data-quests-queue="list"] [data-queue-key="${mine.key}"]`);
+    await line.hover();
+    await line.locator('[data-quests-pin]').click();
+    await page.waitForTimeout(2500);
+    const after = await apiQueue();
+    const onTop = after.view[0] === mine.key;
+    const pinnedIcons = await page.locator('[data-quests-queue="list"] [data-quests-pin="pinned"]').count();
+    const pinnedLine = await page.locator('[data-quests-queue="list"] [data-queue-key]').first().getAttribute('data-queue-key');
+    console.log(JSON.stringify({ pinned: mine.key, latch: after.latch, onTop, pinnedIcons, pinnedLine }));
+    await page.locator('[data-quests-queue="list"] [data-quests-pin="pinned"]').click();
+    await page.waitForTimeout(2500);
+    console.log(JSON.stringify({ unpinnedByClick: (await apiQueue()).latch === null, usersPinPutBack: q.latch }));
+    await putLatch(q.latch);
+  }
+
+  if (check === 'readonly') {
+    console.log(JSON.stringify({
+      banner: await page.locator('[data-quests-queue="outside"]').isVisible(),
+      inputBox: await page.locator('[data-chat-view="shown"] [data-slot="prompt-input-textarea"]').count(),
+    }));
+  }
+
+  if (check === 'forest') {
+    const q = await apiQueue();
+    const root = q.entries.find((e) => e.rootKey === e.key && q.entries.some((c) => c.parentKey === e.key && c.rootKey === e.key));
+    const kids = q.entries.filter((c) => c.parentKey === root.key && c.rootKey === root.key).map((c) => c.key);
+    const roots = await page.evaluate(() => Array.from(document.querySelectorAll('[data-quests-queue="forest"] > div > div > [data-forest-key]')).map((n) => n.dataset.forestKey));
+    await page.locator(`[data-forest-key="${root.key}"]`).hover();
+    const lineLit = await page.locator(`[data-quests-queue="list"] [data-queue-key="${root.key}"]`).evaluate((n) => n.className.includes('brightness-150'));
+    await page.locator(`[data-quests-queue="list"] [data-queue-key="${kids[0]}"]`).hover();
+    const nodeLit = await page.locator(`[data-forest-key="${kids[0]}"]`).evaluate((n) => n.className.includes('brightness-150'));
+    await page.locator(`[data-forest-key="${root.key}"] button`).click();
+    const folded = await page.locator(`[data-forest-key="${kids[0]}"]`).count() === 0;
+    const target = q.entries.find((e) => e.sessionId && e.sessionId !== sessionId);
+    await page.locator(`[data-forest-key="${target.key}"]`).click();
+    await page.waitForTimeout(2000);
+    console.log(JSON.stringify({
+      rootsSideBySide: roots.length === q.entries.filter((e) => e.rootKey === e.key).length, root: root.key, kids, lineLit, nodeLit, folded,
+      clickOpened: await page.evaluate((id) => location.pathname === `/session/${id}`, target.sessionId),
+    }));
+  }
+
+  if (check === 'ticketchat') {
+    // Click an unclaimed ticket: its tab is a new chat for it (requirement 97): the ticket's page (title, text)
+    // fills the chat, and the input box holds "claim ticket #<n> <link> ", unsent. The text is then cleared, so
+    // no draft is left behind. Nothing is sent.
+    const q = await apiQueue();
+    const t = q.entries.find((e) => e.state === 'unclaimed' && e.placement === 'queue');
+    await page.locator('[data-quests-group="Tickets-Unclaimed"]').click();
+    await page.waitForTimeout(300);
+    // An in-page click: the drawer can reach below the window, where a mouse click lands on nothing.
+    await page.evaluate((key) => document.querySelector(`[data-quests-queue="list"] [data-queue-key="${key}"]`).click(), t.key);
+    await page.waitForTimeout(3000);
+    const pageUrl = await page.evaluate(() => location.pathname);
+    const view = page.locator(`[data-quests-ticket="${t.number}"]`);
+    const title = (await view.locator('h1').textContent().catch(() => '')).trim();
+    const bodyChars = (await view.locator('.prose').textContent().catch(() => '')).length;
+    const box = page.locator(`[data-quests-ticket-chat="${t.number}"] [data-slot="prompt-input-textarea"]`);
+    const text = await box.inputValue();
+    const pageInChat = await page.locator(`[data-quests-ticket-chat="${t.number}"] [data-quests-ticket="${t.number}"]`).count();
+    console.log(JSON.stringify({ ticket: t.key, pageUrl, title, titleOk: title === t.title, bodyChars, pageInChat, text, ok: text === `claim ticket #${t.number} ${t.url} ` }));
+    await box.fill('');
+    await page.waitForTimeout(1500);
+  }
+
+  if (check === 'tabhover') {
+    // Hovering the chat's tab lights up its line in the list and its node in the forest. The tab wears the same
+    // family color as its line, and the same kind sign.
+    const key = (await apiQueue()).entries.find((e) => e.sessionId === sessionId).key;
+    const tab = page.locator('[data-quests-tabs="row"] > [draggable="true"]').first();
+    const line = page.locator(`[data-quests-queue="list"] [data-queue-key="${key}"]`);
+    const node = page.locator(`[data-forest-key="${key}"]`);
+    const lit = async () => ({
+      tab: await tab.evaluate((n) => n.className.includes('brightness-150')),
+      line: await line.evaluate((n) => n.className.includes('brightness-150')),
+      node: await node.evaluate((n) => n.className.includes('brightness-150')),
+    });
+    await tab.hover();
+    await page.waitForTimeout(300);
+    const fromTab = await lit();
+    await page.mouse.move(0, 0);
+    await line.hover();
+    await page.waitForTimeout(300);
+    const fromLine = await lit();
+    await page.mouse.move(0, 0);
+    await node.hover();
+    await page.waitForTimeout(300);
+    const fromNode = await lit();
+    console.log(JSON.stringify({
+      key,
+      fromTab, fromLine, fromNode,
+      sameColor: (await tab.evaluate((n) => n.style.backgroundColor)) === (await line.evaluate((n) => n.style.backgroundColor)),
+      sign: { tab: await tab.locator('[title="Quest"], [title="Side quest"], [title="Blocker"]').count(), line: await line.locator('[title="Quest"], [title="Side quest"], [title="Blocker"]').count() },
+    }));
+    if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT });
+  }
+
+  if (check === 'groups') {
+    // The list has three groups with a separator between them: open chats, chats closed without /finalize-chat,
+    // unclaimed tickets. The groups come from the server; a separator sits exactly where the group changes.
+    const q = await apiQueue();
+    const group = new Map(q.entries.map((e) => [e.key, e.group]));
+    const rows = await page.locator('[data-quests-queue="list"] [data-queue-key]').evaluateAll((ns) => ns.map((n) => [n.dataset.queueKey, n.className.includes('before:h-[2px]')]));
+    const expected = rows.map(([k], i) => i > 0 && group.get(rows[i - 1][0]) !== group.get(k));
+    console.log(JSON.stringify({
+      separators: rows.filter(([, s]) => s).map(([k]) => k),
+      asExpected: rows.every(([, s], i) => s === expected[i]),
+      groups: [0, 1, 2].map((g) => rows.filter(([k]) => group.get(k) === g).length),
+    }));
+  }
+
+  if (check === 'planwait') {
+    // A chat whose plan waits for approval shows the approval card above the input box, with "Revise" and
+    // "Build the plan". Nothing is clicked.
+    await page.locator('[data-quests-plan="approval"]').first().waitFor({ timeout: 15000 }).catch(() => undefined);
+    const card = page.locator('[data-quests-plan="approval"]');
+    console.log(JSON.stringify({
+      cards: await card.count(),
+      text: (await card.first().textContent().catch(() => '')).replace(/\s+/g, ' ').slice(0, 160),
+      buttons: await card.locator('button').allTextContents().catch(() => []),
+    }));
+  }
+
+  if (check === 'livescroll') {
+    // Reading older messages while the transcript changes on disk: the reading position must not move. The pane
+    // is scrolled to the middle, a row in view is marked, the transcript's mtime is touched (the watcher reloads
+    // the chat), and the marked row's place is measured again 4 s later.
+    const jsonl = new Database(path.join(os.homedir(), '.cloudcli', 'auth.db'), { readonly: true })
+      .prepare('select jsonl_path from sessions where session_id = ?').get(sessionId)?.jsonl_path;
+    await page.locator('[data-chat-view="shown"] .chat-messages-pane .chat-message').first().waitFor({ timeout: 40000 }).catch(() => undefined);
+    await page.waitForTimeout(2000);
+    await pane.evaluate((p) => { p.scrollTop = Math.round(p.scrollHeight * 0.5); });
+    await page.waitForTimeout(2500);
+    const measure = () => pane.evaluate((p) => {
+      const top = p.getBoundingClientRect().top;
+      let marker = p.querySelector('[data-quests-marker]');
+      if (!marker) {
+        marker = Array.from(p.querySelectorAll('.chat-message')).find((m) => m.getBoundingClientRect().top >= top);
+        marker?.setAttribute('data-quests-marker', '');
+      }
+      return { scrollTop: p.scrollTop, markerTop: marker ? Math.round(marker.getBoundingClientRect().top - top) : null, markerStillThere: Boolean(marker), rows: p.querySelectorAll('.chat-message').length, height: p.scrollHeight };
+    });
+    const before = await measure();
+    const now = new Date();
+    require('node:fs').utimesSync(jsonl, now, now);
+    // Then 30 s of watching, every 3 s: on a running chat, rows land meanwhile.
+    const samples = [];
+    for (let i = 0; i < 10; i++) {
+      await page.waitForTimeout(3000);
+      const m = await measure();
+      samples.push({ rows: m.rows, height: m.height, scrollTop: m.scrollTop, markerTop: m.markerTop });
+    }
+    const jumped = samples.some((s) => s.markerTop !== before.markerTop);
+    const rowsLanded = samples[samples.length - 1].rows - before.rows;
+    console.log(JSON.stringify({ jsonl: path.basename(jsonl), before, samples, rowsLanded, jumped }));
+  }
+
+  if (check === 'typejump') {
+    // At the bottom of a long chat, typing one character into the input box must not move the view. The pane is
+    // scrolled to its end, the last row in view is marked, one character is typed, and the row's place and the
+    // pane's scrollTop are measured again; the character is then deleted.
+    await page.locator('[data-chat-view="shown"] .chat-messages-pane .chat-message').first().waitFor({ timeout: 40000 }).catch(() => undefined);
+    await page.waitForTimeout(2000);
+    await pane.evaluate((p) => { p.scrollTop = p.scrollHeight; });
+    await page.waitForTimeout(1500);
+    const measure = () => pane.evaluate((p) => {
+      const top = p.getBoundingClientRect().top;
+      let marker = p.querySelector('[data-quests-marker]');
+      if (!marker) {
+        marker = Array.from(p.querySelectorAll('.chat-message')).reverse().find((m) => m.getBoundingClientRect().top >= top);
+        marker?.setAttribute('data-quests-marker', '');
+      }
+      return { scrollTop: p.scrollTop, clientHeight: p.clientHeight, height: p.scrollHeight, markerTop: marker ? Math.round(marker.getBoundingClientRect().top - top) : null, downArrow: Boolean(document.querySelector('[aria-label="Scroll to bottom"]')) };
+    });
+    // As Noam had it: a draft of several lines already in the box, the view at the end, then one more character.
+    const box = page.locator('[data-chat-view="shown"] [data-slot="prompt-input-textarea"]').first();
+    await box.fill('4.2 yes. and all the repeats too.\ndoes that change anything?\n\n\nwe dont want to DO any fixes in this chat.\nInstead, I want a ticket per item and i will fix each one in its own chat.\n');
+    await page.waitForTimeout(800);
+    await pane.evaluate((p) => { p.scrollTop = p.scrollHeight; });
+    await page.waitForTimeout(1200);
+    const before = await measure();
+    await box.focus();
+    await page.keyboard.press('End');
+    await page.keyboard.type('s');
+    await page.waitForTimeout(1200);
+    const after = await measure();
+    await box.fill('');
+    await page.waitForTimeout(500);
+    const cleared = await measure();
+    console.log(JSON.stringify({ before, after, cleared, jumped: after.markerTop !== before.markerTop }));
+  }
+
+  if (check === 'join') {
+    // A message sent while the chat works joins the running turn: the process (pid) stays, the running Bash
+    // finishes, both replies land. Starts a throwaway chat from the "+" tab; <sessionId> is only the page to start on.
+    const fs = require('node:fs');
+    const reg = () => fs.readdirSync(path.join(os.homedir(), '.claude', 'sessions')).map((f) => {
+      try { return JSON.parse(fs.readFileSync(path.join(os.homedir(), '.claude', 'sessions', f), 'utf8')); } catch { return null; }
+    }).filter((d) => d && d.entrypoint === 'sdk-ts').map((d) => `${String(d.sessionId).slice(0, 8)}:${d.pid}:${d.status}`).sort().join(' ');
+    const texts = () => page.locator('[data-message-timestamp]').evaluateAll((rows) => rows.slice(-6).map((r) => r.textContent.replace(/\s+/g, ' ').slice(0, 90)));
+    await page.locator('[data-quests-tab="new"]').first().click();
+    await page.waitForTimeout(2500);
+    const box = page.locator('[data-chat-view="shown"] [data-slot="prompt-input-textarea"]').first();
+    const t0 = Date.now();
+    await box.fill('Use Bash to run exactly: sleep 45; echo finished. Then reply with exactly: first done');
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(12000);
+    const during = { at: Date.now() - t0, reg: reg(), url: await page.evaluate(() => location.pathname) };
+    await box.fill('Reply with exactly: second done');
+    await page.keyboard.press('Enter');
+    const samples = [];
+    for (let i = 0; i < 30; i += 1) {
+      await page.waitForTimeout(3000);
+      samples.push({ at: Date.now() - t0, reg: reg(), last: (await texts()).slice(-2) });
+      const all = (await texts()).join(' | ');
+      if (all.includes('first done') && all.includes('second done')) break;
+    }
+    console.log(JSON.stringify({ during, samples, rows: await texts() }, null, 1));
+  }
+
+  if (check === 'worktab') {
+    // The last agent call's "open as a tab" icon: a work tab opens right after the chat's tab, the address is
+    // /work/agent/<session>/<agent>, and the tab shows the agent view (its timeline once the server answers).
+    const icon = page.locator('[data-quests-work="open-agent"]').last();
+    await icon.waitFor({ timeout: 20000 }).catch(() => undefined);
+    const counts = { agentIcons: await page.locator('[data-quests-work="open-agent"]').count(), stripIcons: await page.locator('[data-quests-work^="open-"]').count(), chips: await page.locator('[data-quests-work-chip]').count(), rows: await page.locator('[data-message-timestamp]').count() };
+    console.log(JSON.stringify(counts));
+    if (!counts.agentIcons) { await browser.close(); return; }
+    // The agent's row usually sits inside a folded tool group (kept mounted, hidden), where a DOM click is not
+    // delivered; the check calls the row's React handler, as a click on the unfolded row would.
+    await icon.evaluate((n) => {
+      const key = Object.keys(n).find((k) => k.startsWith('__reactProps'));
+      n[key].onClick({ preventDefault() {}, stopPropagation() {} });
+    });
+    await page.waitForTimeout(4000);
+    const tabs = await page.locator('[data-quests-tabs="row"] [title]').evaluateAll((ns) => ns.map((n) => (n.getAttribute('title') || '').slice(0, 40)));
+    console.log(JSON.stringify({
+      url: await page.evaluate(() => location.pathname),
+      view: await page.locator('[data-quests-work]').first().getAttribute('data-quests-work').catch(() => null),
+      text: (await page.locator('[data-quests-work="agent"]').textContent().catch(() => '')).slice(0, 160),
+      tabs,
+      titles: await page.evaluate(() => localStorage.getItem('quests-work-titles')),
+      panes: await page.evaluate(() => localStorage.getItem('quests-panes')),
+    }));
+  }
+
+  if (check === 'dupes') {
+    // Rows shown twice: the top-level rows (a lazy row's wrapper and the row inside both carry the attributes,
+    // so nested ones are left out), grouped by row id and by text head. Expected: no group by id.
+    const rows = await page.locator('[data-chat-view="shown"] .chat-messages-pane > div > div > [data-message-timestamp]').evaluateAll((ns) => ns.map((n) => ({ ts: n.getAttribute('data-message-timestamp'), id: n.getAttribute('data-row-id') || '', text: n.textContent.replace(/\s+/g, ' ').trim().slice(0, 70) })));
+    const group = (key) => { const by = new Map(); for (const r of rows) by.set(r[key], [...(by.get(r[key]) || []), r]); return [...by.values()].filter((g) => g.length > 1); };
+    const byId = group('id');
+    const byText = group('text');
+    console.log(JSON.stringify({ rows: rows.length, dupeGroupsById: byId.length, dupeGroupsByText: byText.length, sampleById: byId.slice(0, 3), sampleByText: byText.slice(0, 3) }, null, 1));
+  }
+
+  if (check === 'ledger') {
+    // The chat view draws the transcript (requirement 52): the rows drawn, by id, in order; then 90 s of the chat working
+    // (run it while the chat answers in Cursor); then again. Every earlier id must still be there, in the same
+    // relative order, each once, and the new ids only at the ends.
+    const readIds = () => page.locator('[data-chat-view="shown"] .chat-messages-pane > div > div > [data-row-id]').evaluateAll((ns) => ns.map((n) => n.getAttribute('data-row-id')));
+    const before = await readIds();
+    await page.waitForTimeout(90000);
+    const after = await readIds();
+    const position = new Map(after.map((id, i) => [id, i]));
+    const missing = before.filter((id) => !position.has(id));
+    const kept = before.filter((id) => position.has(id)).map((id) => position.get(id));
+    const sameOrder = kept.every((pos, i) => i === 0 || pos > kept[i - 1]);
+    const unique = new Set(after).size === after.length;
+    const first = kept[0] ?? 0;
+    const last = kept[kept.length - 1] ?? -1;
+    const insertedInside = after.slice(first, last + 1).filter((id) => !before.includes(id));
+    console.log(JSON.stringify({ before: before.length, after: after.length, missing, sameOrder, unique, insertedInside, newAtEnd: after.length - 1 - last, newAtStart: first }, null, 1));
+  }
+
+  if (check === 'reload') {
+    // The rows come from the transcript and the open state from the cache: the rows, open tool lines and folds must be
+    // the same across a reload. The check opens the last two collapsed tool lines first, so there is state to keep.
+    const read = async () => ({
+      ids: await page.locator('[data-chat-view="shown"] .chat-messages-pane > div > div > [data-row-id]').evaluateAll((ns) => ns.map((n) => n.getAttribute('data-row-id'))),
+      open: await page.locator('.chat-message.qt-open').evaluateAll((ns) => ns.map((n) => n.getAttribute('data-row-id'))),
+      folds: await page.locator('[data-quests-fold]').evaluateAll((ns) => ns.map((n) => n.getAttribute('data-quests-fold'))),
+    });
+    const lines = page.locator('[data-chat-view="shown"] .chat-messages-pane > div > div > .chat-message:not(.qt-open):not(.user)');
+    const n = await lines.count();
+    let clicked = 0;
+    for (let i = n - 1; i >= 0 && clicked < 2; i -= 1) {
+      const line = lines.nth(i);
+      await line.scrollIntoViewIfNeeded().catch(() => undefined);
+      const box = await line.boundingBox().catch(() => null);
+      if (!box || box.height > 10) continue;
+      await page.mouse.click(box.x + box.width / 2, box.y + 3);
+      clicked += 1;
+    }
+    await page.waitForTimeout(1500);
+    const before = await read();
+    await page.reload();
+    await page.locator('[data-chat-view="shown"] .chat-messages-pane [data-row-id]').first().waitFor({ timeout: 20000 }).catch(() => undefined);
+    await page.waitForTimeout(3000);
+    const after = await read();
+    const same = (a, b) => a.length === b.length && a.every((x, i) => x === b[i]);
+    console.log(JSON.stringify({ clicked, before: { rows: before.ids.length, open: before.open, folds: before.folds }, after: { rows: after.ids.length, open: after.open, folds: after.folds }, sameRows: same(before.ids, after.ids), sameOpen: same(before.open, after.open), sameFolds: same(before.folds, after.folds) }, null, 1));
+  }
+
+  if (check === 'folds') {
+    // Repeated replies fold: the fold lines (count and time range), the replies shown, and what one click opens.
+    const read = async () => ({
+      folds: await page.locator('[data-quests-fold]').evaluateAll((ns) => ns.map((n) => n.textContent.trim().slice(0, 80))),
+      replies: await page.locator('.chat-message.assistant, [data-message-timestamp] .prose').count(),
+      rows: await page.locator('[data-chat-view="shown"] .chat-messages-pane > div > div > [data-message-timestamp]').count(),
+      tails: await page.locator('[data-message-timestamp] .prose').evaluateAll((ns) => ns.slice(-6).map((n) => n.textContent.replace(/\s+/g, ' ').trim().slice(-110))),
+    });
+    const before = await read();
+    await page.locator('[data-quests-fold] button').last().click().catch(() => undefined);
+    await page.waitForTimeout(1500);
+    const after = await read();
+    console.log(JSON.stringify({ before, after }, null, 1));
+  }
+
+  if (check === 'peek') {
+    // The pane's own message objects (the last 16), read off the React fiber: what the fold rule sees.
+    const rows = await page.locator('[data-chat-view="shown"] .chat-messages-pane').evaluate((pane) => {
+      const key = Object.keys(pane).find((k) => k.startsWith('__reactFiber'));
+      let fiber = key ? pane[key] : null;
+      while (fiber && !(fiber.memoizedProps && Array.isArray(fiber.memoizedProps.visibleMessages))) fiber = fiber.return;
+      const messages = fiber ? fiber.memoizedProps.visibleMessages : [];
+      return messages.slice(-16).map((m) => [m.timestamp?.slice(11, 19), m.type, m.isToolUse ? `tool:${m.toolName}` : '', m.isThinking ? 'thinking' : '', typeof m.content, String(m.content ?? '').replace(/\s+/g, ' ').slice(0, 60), String(m.content ?? '').replace(/\s+/g, ' ').slice(-50)].join(' | '));
+    });
+    console.log(rows.join('\n'));
+  }
+
+  if (check === 'runners') {
+    // What the page says about a chat's background work: the strip's chips, the banner, the agent cards' figures.
+    await page.waitForTimeout(6000);
+    console.log(JSON.stringify({
+      strip: await page.locator('[role="status"][aria-label="Background tasks"] button').evaluateAll((ns) => ns.map((n) => (n.getAttribute('title') || n.textContent).replace(/\s+/g, ' ').trim().slice(0, 90))),
+      banner: await page.locator('.chat-activity-tab').evaluateAll((ns) => ns.map((n) => n.textContent.replace(/\s+/g, ' ').trim().slice(0, 160))),
+      agents: await page.locator('[data-quests-subagent="figures"]').evaluateAll((ns) => ns.slice(-5).map((n) => `${n.parentElement.querySelector('[data-quests-subagent="step"]')?.textContent ?? ''} | ${n.textContent.trim()}`)),
+    }, null, 1));
+  }
+
+  if (check === 'empties') {
+    // Rows that render nothing but a separator: which messages they are (read off the React fiber of each row).
+    // WAIT_MS (default 4000) lets a live chat stream rows first: the empties come with the live stream.
+    await page.waitForTimeout(Number(process.env.WAIT_MS || 4000));
+    const rows = await page.locator('[data-chat-view="shown"] .chat-messages-pane').evaluate((pane) => {
+      const out = [];
+      for (const row of pane.querySelectorAll('[data-chat-view="shown"] .chat-messages-pane > div > div > [data-message-timestamp]')) {
+        if (row.textContent.trim() !== '') continue;
+        const key = Object.keys(row).find((k) => k.startsWith('__reactFiber'));
+        let fiber = key ? row[key] : null;
+        let message = null;
+        for (let i = 0; fiber && i < 12 && !message; i += 1) {
+          const m = fiber.memoizedProps && fiber.memoizedProps.message;
+          if (m && typeof m === 'object' && 'type' in m) message = m;
+          fiber = fiber.child || fiber.return;
+        }
+        out.push({ ts: row.getAttribute('data-message-timestamp'), height: row.getBoundingClientRect().height, type: message?.type, tool: message?.toolName, notif: Boolean(message?.isTaskNotification), thinking: Boolean(message?.isThinking), content: String(message?.content ?? '').slice(0, 60) });
+      }
+      return out;
+    });
+    console.log(JSON.stringify({ empties: rows.length, sample: rows.slice(0, 8) }, null, 1));
+  }
+
+  if (check === 'workers') {
+    // The workers panel: the main line and one line per worker, as shown.
+    await page.locator('[data-quests-workers="panel"]').waitFor({ timeout: 15000 }).catch(() => undefined);
+    console.log(JSON.stringify({
+      main: await page.locator('[data-quests-workers="main"]').evaluateAll((ns) => ns.map((n) => n.textContent.replace(/\s+/g, ' ').trim())),
+      workers: await page.locator('[data-quests-workers="worker"]').evaluateAll((ns) => ns.map((n) => n.textContent.replace(/\s+/g, ' ').trim().slice(0, 140))),
+    }, null, 1));
+  }
+
+  if (check === 'tailrows') {
+    // The last rows of the transcript as drawn: height, text head, and the message behind each (off the React fiber).
+    await page.waitForTimeout(Number(process.env.WAIT_MS || 3000));
+    const rows = await page.locator('[data-chat-view="shown"] .chat-messages-pane').evaluate((pane) => {
+      const all = [...pane.querySelectorAll('[data-message-timestamp]')].filter((r) => !r.parentElement.closest('[data-message-timestamp]'));
+      return all.slice(-10).map((row) => {
+        const key = Object.keys(row).find((k) => k.startsWith('__reactFiber'));
+        let fiber = key ? row[key] : null;
+        let message = null;
+        for (let i = 0; fiber && i < 14 && !message; i += 1) {
+          const m = fiber.memoizedProps && (fiber.memoizedProps.message || (fiber.memoizedProps.group && fiber.memoizedProps.group.messages && fiber.memoizedProps.group.messages[0]));
+          if (m && typeof m === 'object' && 'type' in m) message = m;
+          fiber = fiber.child || fiber.return;
+        }
+        return { ts: row.getAttribute('data-message-timestamp')?.slice(11, 19), h: Math.round(row.getBoundingClientRect().height), text: row.textContent.replace(/\s+/g, ' ').trim().slice(0, 60), type: message?.type, tool: message?.toolName, group: row.className.includes('tool') };
+      });
+    });
+    console.log(JSON.stringify(rows, null, 0).replace(/\},\{/g, '},\n{'));
+  }
+
+  if (check === 'place') {
+    // Focus mode. One flag says where an entry is; each line has one button per place (the queue, "On hold",
+    // "Archived"), and a button sets the place, never toggles it. On the first line of "Pending chats": hold
+    // (twice: still on hold), then archive from the "On hold" drawer, then the queue button from "Archived"
+    // (it must be out of both and last in the stored order), then the queue button again on a line already in
+    // the queue (still last). At each step the line must sit in exactly one drawer. The place and the order
+    // are put back at the end.
+    const put = (route, body) => page.evaluate(async ([r, b]) => fetch(`/api/quests/queue${r}`, {
+      method: 'PUT', headers: { Authorization: `Bearer ${localStorage.getItem('auth-token')}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(b),
+    }), [route, body]);
+    const LABELS = ['Pending chats', 'Active chats', 'On hold', 'Tickets-Unclaimed', 'Archived'];
+    for (const label of LABELS) {
+      const header = page.locator(`[data-quests-group="${label}"]`);
+      if ((await header.locator('xpath=..').locator('[data-queue-key]').count()) === 0) { await header.click(); await page.waitForTimeout(300); }
+    }
+    const drawersOf = (key) => page.evaluate(([k, labels]) => labels.filter((l) => {
+      const h = document.querySelector(`[data-quests-group="${l}"]`);
+      return h && h.parentElement.querySelector(`[data-queue-key="${CSS.escape(k)}"]`);
+    }), [key, LABELS]);
+    const before = await apiQueue();
+    const key = (await page.locator('[data-quests-group="Pending chats"]').locator('xpath=..').locator('[data-queue-key]').first().getAttribute('data-queue-key'));
+    const original = before.entries.find((e) => e.key === key).placement;
+    const press = async (where) => { await page.locator(`[data-quests-queue="list"] [data-queue-key="${key}"] [data-quests-place="${where}"]`).first().dispatchEvent('click'); await page.waitForTimeout(1000); };
+    const state = async () => { const q = await apiQueue(); const e = q.entries.find((x) => x.key === key); return { placement: e.placement, last: q.order.at(-1) === key, drawers: await drawersOf(key), lit: await page.locator(`[data-quests-queue="list"] [data-queue-key="${key}"] [data-quests-here="true"]`).evaluateAll((ns) => ns.map((n) => n.dataset.questsPlace)) }; };
+    const steps = {};
+    await press('hold'); steps.hold = await state();
+    await press('hold'); steps.holdAgain = await state();
+    await press('archive'); steps.archive = await state();
+    await press('queue'); steps.queue = await state();
+    await press('queue'); steps.queueAgain = await state();
+    await put('/place', { key, where: original });
+    await put('/order', { order: before.order });
+    await page.waitForTimeout(2500);
+    const after = await apiQueue();
+    const ok = steps.hold.placement === 'hold' && JSON.stringify(steps.hold.drawers) === '["On hold"]' && JSON.stringify(steps.hold.lit) === '["hold"]'
+      && steps.holdAgain.placement === 'hold'
+      && steps.archive.placement === 'archive' && JSON.stringify(steps.archive.drawers) === '["Archived"]' && JSON.stringify(steps.archive.lit) === '["archive"]'
+      && steps.queue.placement === 'queue' && steps.queue.last && !steps.queue.drawers.includes('On hold') && !steps.queue.drawers.includes('Archived') && steps.queue.lit.length === 0
+      && steps.queueAgain.placement === 'queue' && steps.queueAgain.last;
+    console.log(JSON.stringify({ key, ok, steps, restored: JSON.stringify(after.order) === JSON.stringify(before.order) && after.entries.find((e) => e.key === key).placement === original }, null, 1));
+  }
+
+  if (check === 'search') {
+    // Focus mode: text in the sidebar's search box leaves only the lines whose name, title, ticket number or
+    // area contain it, in every drawer, all open; text that matches nothing leaves no line; clearing the box
+    // restores the list.
+    const q = await apiQueue();
+    const keys = () => page.locator('[data-quests-queue="list"] [data-queue-key]').evaluateAll((ns) => ns.map((n) => n.dataset.queueKey));
+    const textOf = (e) => [e.title, e.ticketTitle, e.number !== null ? `#${e.number}` : '', e.area, e.closingLine].filter(Boolean).join(' ').toLowerCase();
+    const box = page.locator('input.nav-search-input:visible').first();
+    const before = (await keys()).length;
+    const sample = q.entries.find((e) => e.placement !== 'archive' && e.sessionId) ?? q.entries[0];
+    const word = sample.title.split(/\s+/).find((w) => w.length >= 3) ?? sample.title.slice(0, 3);
+    await box.fill(word);
+    await page.waitForTimeout(500);
+    const shown = await keys();
+    const expected = q.view.filter((k) => textOf(q.entries.find((e) => e.key === k)).includes(word.toLowerCase()));
+    const allMatch = shown.every((k) => expected.includes(k));
+    await box.fill('zzqqxxvv');
+    await page.waitForTimeout(500);
+    const none = (await keys()).length;
+    await box.fill('');
+    await page.waitForTimeout(500);
+    const after = (await keys()).length;
+    console.log(JSON.stringify({ word, before, shown: shown.length, expected: expected.length, allMatch, complete: shown.length === expected.length, none, restored: after === before }));
+  }
+
+  if (check === 'hold') {
+    // Focus mode: the "On hold" group lists exactly the dismissed entries of the queue, in queue order; a click
+    // opens it. Nothing is put on hold here.
+    const q = await apiQueue();
+    const dismissed = q.view.filter((k) => q.entries.find((x) => x.key === k)?.placement === 'hold');
+    const group = page.locator('[data-quests-group="On hold"]');
+    const label = (await group.innerText().catch(() => '')).replace(/\s+/g, ' ');
+    await group.click().catch(() => undefined);
+    await page.waitForTimeout(400);
+    const members = await group.locator('xpath=..').locator('[data-queue-key]').evaluateAll((ns) => ns.map((n) => n.dataset.queueKey));
+    console.log(JSON.stringify({ label, dismissed: dismissed.length, members: members.length, same: JSON.stringify(members) === JSON.stringify(dismissed) }));
+  }
+
+  if (check === 'dragunclaimed') {
+    // Focus mode, the "Tickets-Unclaimed" drawer open: its last root ticket is dragged above its first; the
+    // stored order must hold it there, and still after a reload. The stored order is put back at the end.
+    const before = await apiQueue();
+    const put = (route, body) => page.evaluate(async ([r, b]) => fetch(`/api/quests/queue${r}`, {
+      method: 'PUT', headers: { Authorization: `Bearer ${localStorage.getItem('auth-token')}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(b),
+    }), [route, body]);
+    const drawer = page.locator('[data-quests-group="Tickets-Unclaimed"]');
+    const drawerOrder = async () => drawer.locator('xpath=..').locator('[data-queue-key]').evaluateAll((ns) => ns.map((n) => n.dataset.queueKey));
+    await drawer.click();
+    await page.waitForTimeout(400);
+    const shown = await drawerOrder();
+    const roots = shown.filter((k) => { const e = before.entries.find((x) => x.key === k); return e && e.rootKey === k; });
+    const first = roots[0];
+    const last = roots[roots.length - 1];
+    await page.locator(`[data-queue-key="${last}"]`).scrollIntoViewIfNeeded();
+    const from = await page.locator(`[data-queue-key="${last}"]`).boundingBox();
+    const to = await page.locator(`[data-queue-key="${first}"]`).boundingBox();
+    await page.mouse.move(from.x + 40, from.y + from.height / 2);
+    await page.mouse.down();
+    for (let i = 1; i <= 8; i++) await page.mouse.move(to.x + 40, from.y + (to.y + 3 - from.y) * (i / 8));
+    await page.mouse.up();
+    await page.waitForTimeout(2500);
+    const after = await drawerOrder();
+    // A blocker or side quest of the drawer dragged to the bottom: its whole family lands there, as one block.
+    const member = shown.find((k) => { const e = before.entries.find((x) => x.key === k); return e && e.rootKey !== k; });
+    let familyAtBottom = null;
+    if (member) {
+      const rootKey = before.entries.find((x) => x.key === member).rootKey;
+      const family = shown.filter((k) => before.entries.find((x) => x.key === k)?.rootKey === rootKey);
+      await page.locator(`[data-queue-key="${member}"]`).scrollIntoViewIfNeeded();
+      const a = await page.locator(`[data-queue-key="${member}"]`).boundingBox();
+      await page.locator(`[data-queue-key="${after[after.length - 1]}"]`).scrollIntoViewIfNeeded();
+      const b = await page.locator(`[data-queue-key="${after[after.length - 1]}"]`).boundingBox();
+      await page.mouse.move(a.x + 40, a.y + a.height / 2);
+      await page.mouse.down();
+      for (let i = 1; i <= 8; i++) await page.mouse.move(b.x + 40, a.y + (b.y + 22 - a.y) * (i / 8));
+      await page.mouse.up();
+      await page.waitForTimeout(2500);
+      const now = await drawerOrder();
+      familyAtBottom = { member, family, tail: now.slice(-family.length), ok: now.slice(-family.length).every((k) => family.includes(k)) };
+    }
+    await page.reload();
+    await page.waitForTimeout(6000);
+    await drawer.click();
+    await page.waitForTimeout(400);
+    const reloaded = await drawerOrder();
+    const stored = (await apiQueue()).view.filter((k) => shown.includes(k));
+    const expected = familyAtBottom ? await drawerOrder() : after;
+    console.log(JSON.stringify({ roots: roots.length, first, last, movedAboveFirst: after.indexOf(last) < after.indexOf(first), storedSame: JSON.stringify(stored) === JSON.stringify(expected), reloadSame: JSON.stringify(reloaded) === JSON.stringify(expected), familyAtBottom }));
+    await put('/order', { order: before.order });
+  }
+
+  if (check === 'ticketgroups') {
+    // The Tickets-Unclaimed drawer shows Noam's groups as headers with their counts, each ticket under its group,
+    // the ungrouped last, and a "+ group" line. Nothing is changed.
+    const q = await apiQueue();
+    await page.locator('[data-quests-group="Tickets-Unclaimed"]').click();
+    await page.waitForTimeout(400);
+    const drawer = page.locator('[data-quests-group="Tickets-Unclaimed"]').locator('xpath=..');
+    const headers = await drawer.locator('[data-quests-ticket-group]').evaluateAll((ns) => ns.map((n) => [n.dataset.questsTicketGroup, Number(n.dataset.questsTicketGroupCount)]));
+    const shown = await drawer.locator('[data-queue-key]').evaluateAll((ns) => ns.map((n) => n.dataset.queueKey));
+    const numbers = shown.map((k) => Number(k.slice(7)));
+    const expected = q.ticketGroups.map((g) => [g.name, g.tickets.filter((t) => numbers.includes(t)).length]);
+    const inSome = new Set(q.ticketGroups.flatMap((g) => g.tickets));
+    const ungrouped = numbers.filter((n) => !inSome.has(n)).length;
+    if (expected.length && ungrouped) expected.push(['', ungrouped]);
+    // Requirement 96: a click on a header folds its tickets away and a second one brings them back; every group
+    // header has a pencil and a trash; a ticket's folder button opens the menu of groups (closed with Escape).
+    const first = drawer.locator('[data-quests-ticket-group]').first();
+    let fold = null;
+    if (headers.length) {
+      const count = () => drawer.locator('[data-queue-key]').count();
+      const before = await count();
+      await first.click(); await page.waitForTimeout(300);
+      const folded = await count();
+      const mark = await first.getAttribute('data-quests-ticket-group-folded');
+      await first.click(); await page.waitForTimeout(300);
+      fold = { before, folded, hidden: before - folded, firstCount: headers[0][1], mark, after: await count() };
+    }
+    const groupButton = drawer.locator('[data-quests-line="group"]').first();
+    let menu = null;
+    if (await groupButton.count()) {
+      await groupButton.click(); await page.waitForTimeout(300);
+      menu = await page.locator('[data-quests-ticket-group-menu] button').evaluateAll((ns) => ns.map((n) => n.textContent));
+      await page.keyboard.press('Escape');
+    }
+    console.log(JSON.stringify({ headers, asExpected: JSON.stringify(headers) === JSON.stringify(expected), tickets: shown.length, addLine: await drawer.locator('[data-quests-ticket-group-add]').count(),
+      pencils: await drawer.locator('[data-quests-ticket-group-rename]').count(), trashes: await drawer.locator('[data-quests-ticket-group-delete]').count(), groups: q.ticketGroups.length, fold, menu }));
+  }
+
+  if (check === 'switch') {
+    // Switching tabs: the given chat and a second chat from the queue are opened as tabs; then the tabs are
+    // clicked in turn, A, B, A, B. Per click: the time until the pane shows rows and holds still, the number of
+    // message reads sent to the server, whether the pane sits at the bottom, and the row count.
+    const q = await apiQueue();
+    const other = q.entries.find((e) => e.sessionId && e.sessionId !== sessionId && !e.heldOutside && e.placement !== 'archive');
+    const reads = [];
+    page.on('request', (r) => { if (/\/api\/providers\/sessions\/[^/]+\/messages/.test(r.url())) reads.push(r.url()); });
+    // Every request during a click, with its start and end time after the click (ms).
+    const timeline = []; let clickAt = 0;
+    page.on('requestfinished', (r) => { if (clickAt) { const t = r.timing(); timeline.push({ url: r.url().replace('http://127.0.0.1:3001', '').slice(0, 90), start: Math.round(t.startTime - clickAt), end: Math.round(t.startTime + t.responseEnd - clickAt) }); } });
+    await page.goto(`http://127.0.0.1:3001/session/${other.sessionId}`);
+    await page.waitForTimeout(6000);
+    const dialog = await page.evaluate(() => { const n = document.querySelector('.fixed.inset-0.z-50'); return n ? n.outerHTML.replace(/\s+/g, ' ').slice(0, 900) : ''; });
+    console.log(JSON.stringify({ dialog }));
+    await page.screenshot({ path: process.env.SHOT || '/tmp/claude-1000/switch.png' });
+    if (dialog) { await page.keyboard.press('Escape'); await page.waitForTimeout(500); }
+    const tabs = page.locator('[data-quests-tabs="row"] div[draggable="true"][title]');
+    const names = await tabs.evaluateAll((ns) => ns.map((n) => n.getAttribute('title')));
+    const results = [];
+    // Long main-thread tasks (over 50 ms) per click: the page is frozen while they run.
+    await page.evaluate(() => { window.__long = []; new PerformanceObserver((l) => { for (const e of l.getEntries()) window.__long.push(Math.round(e.duration)); }).observe({ type: 'longtask', buffered: false }); });
+    const ids = () => page.locator('[data-chat-view="shown"] .chat-messages-pane [data-row-id]').evaluateAll((ns) => ns.map((n) => n.dataset.rowId));
+    // ROUNDS=<n>: n rounds of A, B (default 2); the summary gives the median per tab.
+    for (const target of Array.from({ length: 2 * Number(process.env.ROUNDS || 2) }, (_, i) => i % 2)) {
+      const before = reads.length;
+      const old = new Set(await ids());
+      await page.evaluate(() => { window.__long = []; });
+      // PROFILE=<prefix>: a CPU profile of each click is written to <prefix><click number>.cpuprofile (sampled every 1 ms).
+      const cdp = process.env.PROFILE ? await page.context().newCDPSession(page) : null;
+      if (cdp) { await cdp.send('Profiler.enable'); await cdp.send('Profiler.setSamplingInterval', { interval: 1000 }); await cdp.send('Profiler.start'); }
+      timeline.length = 0;
+      const t0 = Date.now(); clickAt = t0;
+      // In the page: the click, then every animation frame until the pane holds the new chat's rows and none of
+      // the old one's (paintMs: the frame that paints the new chat first) and until the row count stops growing.
+      await tabs.nth(target).evaluate((tab, oldIds) => {
+        const old = new Set(oldIds);
+        const s = { t0: performance.now(), paintMs: null, lastGrowMs: null, rows: 0 };
+        window.__sw = s;
+        const tick = () => {
+          const ids = Array.from(document.querySelectorAll('[data-chat-view="shown"] .chat-messages-pane [data-row-id]'), (n) => n.dataset.rowId);
+          const now = performance.now() - s.t0;
+          if (s.paintMs === null && ids.length > 0 && !ids.some((id) => old.has(id))) s.paintMs = Math.round(now);
+          if (s.paintMs !== null && ids.length !== s.rows) { s.rows = ids.length; s.lastGrowMs = Math.round(now); }
+          // FRAMES=1: what the pane shows at each frame (scroll position, rows, a loading text), to see jumps.
+          const pane = document.querySelector('[data-chat-view="shown"] .chat-messages-pane');
+          if (pane && (s.frames ||= []).length < 80) s.frames.push([Math.round(now), ids.length, Math.round(pane.scrollTop), pane.scrollHeight, pane.clientHeight, /Loading/i.test(pane.innerText.slice(0, 300)) ? 'loading' : '']);
+          if (now < 5000) requestAnimationFrame(tick);
+        };
+        // MUTATIONS=1: what changes in the chat views during the click, counted by kind, element and attribute.
+        const mut = {}; window.__mut = mut;
+        const views = document.querySelector('[data-chat-view]')?.parentElement;
+        if (views) new MutationObserver((records) => { for (const r of records) { const t = r.target.nodeType === 1 ? r.target : r.target.parentElement; const k = `${r.type} ${t?.tagName}.${String(t?.className || '').slice(0, 50)} ${r.attributeName || ''}`; mut[k] = (mut[k] || 0) + 1; } }).observe(views, { subtree: true, attributes: true, childList: true, characterData: true });
+        tab.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        requestAnimationFrame(tick);
+      }, [...old]);
+      let rows = 0; let stableSince = 0; let settled = 0; let first = 0;
+      while (Date.now() - t0 < 15000) {
+        await page.waitForTimeout(50);
+        const now = await ids();
+        if (!first && now.length > 0 && !now.some((id) => old.has(id))) first = Date.now() - t0;
+        const n = now.length;
+        if (n !== rows) { rows = n; stableSince = Date.now(); }
+        else if (n > 0 && Date.now() - stableSince >= 400) { settled = Date.now() - t0 - 400; break; }
+      }
+      const longTasks = await page.evaluate(() => window.__long.slice());
+      if (cdp) require('node:fs').writeFileSync(`${process.env.PROFILE}${results.length}.cpuprofile`, JSON.stringify({ ...(await cdp.send('Profiler.stop')).profile, clickAt: t0 }));
+      await page.waitForTimeout(1500);
+      const atBottom = await page.locator('[data-chat-view="shown"] .chat-messages-pane').evaluate((p) => p.scrollHeight - p.scrollTop - p.clientHeight < 50);
+      // Elements in the pane, and how many of them sit inside a closed (display none) part.
+      const nodes = await page.locator('[data-chat-view="shown"] .chat-messages-pane').evaluate((p) => { const all = p.querySelectorAll('*'); let hidden = 0; for (const n of all) if (n.offsetParent === null && getComputedStyle(n).position !== 'fixed') hidden += 1; return { all: all.length, hidden }; });
+      const inPage = await page.evaluate(() => window.__sw);
+      if (process.env.MUTATIONS) console.log(names[target], JSON.stringify(Object.entries(await page.evaluate(() => window.__mut)).sort((a, b) => b[1] - a[1]).slice(0, 15)));
+      if (process.env.FRAMES) console.log(names[target], JSON.stringify(inPage.frames.filter((f, i, a) => i === 0 || f.slice(1).join() !== a[i - 1].slice(1).join())));
+      results.push({ paintMs: inPage.paintMs, allRowsMs: inPage.lastGrowMs, requests: timeline.filter((x) => x.start < 3000).slice(), nodes, tab: names[target], firstMs: first || null, ms: settled || null, rows, reads: reads.length - before, atBottom, longTasks });
+    }
+    // The page's JavaScript heap after the clicks (what one more copy of the app in an iframe would add).
+    { const cdp = await page.context().newCDPSession(page); const h = await cdp.send('Runtime.getHeapUsage'); console.log(JSON.stringify({ heapMB: Math.round(h.usedSize / 1e6), domNodes: await page.evaluate(() => document.getElementsByTagName('*').length) })); }
+    const median = (xs) => { const v = xs.filter((x) => x !== null).sort((a, b) => a - b); return v[Math.floor(v.length / 2)] ?? null; };
+    const summary = names.slice(0, 2).map((tab) => ({ tab, rows: results.find((r) => r.tab === tab)?.rows, medianFirstMs: median(results.filter((r) => r.tab === tab).map((r) => r.firstMs)), medianMs: median(results.filter((r) => r.tab === tab).map((r) => r.ms)), medianPaintMs: median(results.filter((r) => r.tab === tab).map((r) => r.paintMs)), medianAllRowsMs: median(results.filter((r) => r.tab === tab).map((r) => r.allRowsMs)) }));
+    if (process.env.ROUNDS) console.log(JSON.stringify({ summary, paintMs: results.map((r) => r.paintMs) }));
+    else console.log(JSON.stringify({ dialog, tabs: names, results }, null, 1));
+  }
+
+  if (check === 'archived') {
+    // The "Archived" drawer lists exactly the archived entries of the queue, newest first, and none of them is
+    // among the other lines; a click opens it. Nothing is archived here.
+    const q = await apiQueue();
+    const archived = q.view.filter((k) => q.entries.find((e) => e.key === k)?.placement === 'archive')
+      .sort((a, b) => (q.entries.find((e) => e.key === b).placedAt ?? 0) - (q.entries.find((e) => e.key === a).placedAt ?? 0));
+    const drawer = page.locator('[data-quests-group="Archived"]');
+    const label = (await drawer.innerText().catch(() => '')).replace(/\s+/g, ' ');
+    const before = await page.locator('[data-quests-queue="list"] [data-queue-key]').evaluateAll((ns) => ns.map((n) => n.dataset.queueKey));
+    await drawer.click().catch(() => undefined);
+    await page.waitForTimeout(400);
+    const members = await drawer.locator('xpath=..').locator('[data-queue-key]').evaluateAll((ns) => ns.map((n) => n.dataset.queueKey));
+    console.log(JSON.stringify({ label, archived: archived.length, members: members.length, same: JSON.stringify(members) === JSON.stringify(archived), leaked: before.filter((k) => archived.includes(k)).length }));
+  }
+
+  if (check === 'tabmenu') {
+    // A right-click on the shown tab opens the menu with the chat's options; Escape closes it.
+    const tab = page.locator('[data-quests-tabs="row"] [title]').first();
+    await tab.click({ button: 'right' });
+    await page.waitForTimeout(500);
+    const text = await page.locator('[data-quests-tab-menu]').innerText().catch(() => '');
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    console.log(JSON.stringify({ items: text.split('\n').filter(Boolean), closed: (await page.locator('[data-quests-tab-menu]').count()) === 0 }));
+  }
+
+  if (check === 'lasttab') {
+    // Closing every tab leaves the new chat screen with its "Next from queue" button, and the "New chat" tab.
+    // The browser profile is fresh, so the only tab is <sessionId>.
+    for (let i = 0; i < 6; i += 1) {
+      const close = page.locator('[data-quests-tabs="row"] [title="Close tab"]').first();
+      if ((await close.count()) === 0) break;
+      await close.evaluate((n) => n.click());
+      await page.waitForTimeout(800);
+    }
+    console.log(JSON.stringify({
+      url: await page.evaluate(() => location.pathname),
+      tabs: await page.locator('[data-quests-tabs="row"] [title]').evaluateAll((ns) => ns.map((n) => n.getAttribute('title'))),
+      nextButton: await page.locator('[data-quests-next-from-queue]').count(),
+      chatRows: await page.locator('[data-message-timestamp]').count(),
+    }));
+  }
+
+  if (check === 'textscale') {
+    // Ctrl+= twice (+1 px), Ctrl+wheel down three notches (-1.5 px), Ctrl+0: the chat's text follows (the computed
+    // size of a transcript row), the sidebar's text and the page's root size do not, the label shows the size in px.
+    const size = () => page.evaluate(() => {
+      const row = document.querySelector('[data-chat-view="shown"] .chat-messages-pane .chat-message p, .chat-messages-pane .chat-message');
+      const line = document.querySelector('[data-quests-queue="list"] [data-queue-key]');
+      const toast = document.querySelector('[data-quests-text-size]');
+      return {
+        scale: document.documentElement.dataset.questsTextScale,
+        root: document.documentElement.style.fontSize,
+        chatPx: row ? Number.parseFloat(getComputedStyle(row).fontSize) : null,
+        sidebarPx: line ? Number.parseFloat(getComputedStyle(line).fontSize) : null,
+        toast: toast && toast.classList.contains('is-shown') ? toast.textContent : null,
+      };
+    });
+    const start = await size();
+    await page.keyboard.press('Control+Equal');
+    await page.keyboard.press('Control+Equal');
+    await page.waitForTimeout(100);
+    const up = await size();
+    await page.mouse.move(600, 400);
+    await page.keyboard.down('Control');
+    await page.mouse.wheel(0, 300);
+    await page.keyboard.up('Control');
+    await page.waitForTimeout(200);
+    const down = await size();
+    await page.keyboard.press('Control+Digit0');
+    await page.waitForTimeout(1500);
+    const reset = await size();
+    console.log(JSON.stringify({ start, up, down, reset, upBy: Math.round((up.chatPx - start.chatPx) * 100) / 100, downBy: Math.round((down.chatPx - up.chatPx) * 100) / 100, sidebarSame: up.sidebarPx === start.sidebarPx, rootUntouched: !up.root, toastGone: reset.toast === null }));
+  }
+
+  if (check === 'mention') {
+    // "@" in the input box lists the project's files, as in Cursor (requirement 92): type "@" plus QUERY (default
+    // "read"), wait, read the dropdown, then empty the box again (nothing is sent). Also the file-list request.
+    const lists = [];
+    page.on('requestfinished', async (r) => { if (r.url().includes('/api/file-tree/')) { const t = r.timing(); lists.push({ url: r.url().replace('http://127.0.0.1:3001', '').slice(0, 120), ms: Math.round(t.responseEnd), status: (await r.response())?.status(), bytes: (await r.response().then((x) => x.body()).catch(() => Buffer.alloc(0))).length }); } });
+    const box = page.locator('[data-chat-view="shown"] [data-slot="prompt-input-textarea"]').first();
+    await box.waitFor({ timeout: 40000 });
+    await page.waitForTimeout(3000);
+    await box.click();
+    await page.keyboard.type(`@${process.env.QUERY ?? 'read'}`, { delay: 60 });
+    await page.waitForTimeout(Number(process.env.WAIT || 5000));
+    const items = await page.locator('[data-chat-view="shown"] [data-quests-mentions] .font-mono').evaluateAll((ns) => ns.map((n) => n.textContent).slice(0, 10));
+    const typed = await box.inputValue();
+    await box.fill('');
+    console.log(JSON.stringify({ typed, items, lists }));
+  }
+  if (check === 'preload') {
+    // Open tabs stay built (requirement 89): after a reload, the other open tab is built in the background, and
+    // the first switch to it, like every later one, takes about a frame or two (ms from the click to the second
+    // frame after it). views: each chat view, shown or kept, with its row count.
+    const q = await apiQueue();
+    const other = q.entries.find((e) => e.sessionId && e.sessionId !== sessionId && !e.heldOutside && e.placement !== 'archive');
+    await page.goto(`http://127.0.0.1:3001/session/${other.sessionId}`); await page.waitForTimeout(4000);
+    await page.goto(`http://127.0.0.1:3001/session/${sessionId}`); await page.waitForTimeout(2000);
+    await page.reload(); await page.waitForTimeout(8000);
+    const views = () => page.evaluate(() => [...document.querySelectorAll('[data-chat-view]')].map((v) => `${v.dataset.chatView}:${v.querySelectorAll('[data-row-id]').length}`));
+    const before = await views();
+    const switchMs = [];
+    for (const i of [0, 1, 0, 1]) {
+      switchMs.push(await page.locator('[data-tab-id]').nth(i).evaluate((el) => new Promise((done) => {
+        const s = performance.now();
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        requestAnimationFrame(() => requestAnimationFrame(() => done(Math.round(performance.now() - s))));
+      })));
+      await page.waitForTimeout(800);
+    }
+    console.log(JSON.stringify({ before, switchMs, after: await views() }));
+  }
+  if (check === 'summary') {
+    const drawer = page.locator('[data-chat-view="shown"] [data-summary-drawer]');
+    const state = () => drawer.getAttribute('data-summary-drawer');
+    const start = await state();
+    await drawer.locator('button').click();
+    await page.waitForTimeout(300);
+    const opened = await state();
+    const text = (await drawer.locator('[data-summary-body]').textContent()).trim();
+    const width = (await drawer.boundingBox()).width;
+    await drawer.locator('button').click();
+    await page.waitForTimeout(300);
+    console.log(JSON.stringify({ start, opened, width: Math.round(width), text: text.slice(0, 300), closedAgain: await state() }));
+  }
+  if (check === 'names') {
+    // Every open tab whose chat has a line reads the line's name: one name per chat (requirement 90).
+    await page.waitForTimeout(4000);
+    const pairs = await page.evaluate(() => [...document.querySelectorAll('[data-tab-id]')].map((tab) => {
+      const line = document.querySelector(`[data-session-id="${tab.getAttribute('data-tab-id')}"]`);
+      return { tab: tab.getAttribute('title'), line: line ? line.getAttribute('title').split('\n')[0] : null };
+    }));
+    console.log(JSON.stringify({ pairs, differ: pairs.filter((p) => p.line !== null && p.line !== p.tab).length }));
+  }
+  if (check === 'renamebutton') {
+    // The pencil on the active tab opens the rename popup with the chat name filled in; Cancel closes it.
+    const pencil = page.locator('[data-quests-tab="rename"]');
+    const count = await pencil.count();
+    if (count) { await pencil.first().click(); await page.waitForTimeout(500); }
+    const value = await page.locator('[data-quests-queue="rename"] input').inputValue().catch(() => null);
+    await page.locator('[data-quests-queue="rename"] button', { hasText: 'Cancel' }).click().catch(() => undefined);
+    console.log(JSON.stringify({ pencils: count, prefilled: value, lineRenames: await page.locator('[data-quests-line="rename"]').count() }));
+  }
+
+  if (check === 'subagents') {
+    // The agents' live summary under their calls: each panel's step and figures (tokens, tools, time), read twice
+    // 4 s apart: a running agent's time ticks and its figures follow the agent's transcript.
+    const read = () => page.locator('[data-quests-subagent="figures"]').evaluateAll((ns) => ns.map((n) => ({
+      step: n.parentElement.querySelector('[data-quests-subagent="step"]')?.textContent ?? '',
+      figures: n.textContent.trim(),
+    })));
+    await page.locator('[data-quests-subagent="figures"]').first().waitFor({ timeout: 15000 }).catch(() => undefined);
+    const first = await read();
+    await page.waitForTimeout(4000);
+    const second = await read();
+    console.log(JSON.stringify({ panels: first.length, first: first.slice(-4), second: second.slice(-4) }));
+  }
+
+  if (check === 'focus') {
+    // The default list: "Pending chats" open (the chats that wait for the user; the chat on screen is placed like
+    // any other, requirement 100), then
+    // "Active chats (n)", "On hold (n)", "Tickets-Unclaimed (n)" and "Archived (n)" collapsed; a click opens a
+    // drawer; the active chats running come last; the DONE button sits in the composer and is disabled while
+    // something is typed.
+    const q = await apiQueue();
+    const view = q.view.map((k) => q.entries.find((e) => e.key === k));
+    const mine = q.entries.find((e) => e.sessionId === sessionId)?.key;
+    const expected = view.filter((e) => e.placement === 'queue' && e.waitsForMe).map((e) => e.key);
+    const keys = () => page.locator('[data-quests-queue="list"] [data-queue-key]').evaluateAll((ns) => ns.map((n) => n.dataset.queueKey));
+    const shown = await keys();
+    const groupText = (label) => page.locator(`[data-quests-group="${label}"]`).textContent();
+    const pending = await groupText('Pending chats');
+    const active = await groupText('Active chats');
+    const unclaimed = await groupText('Tickets-Unclaimed');
+    await page.locator('[data-quests-group="Active chats"]').click();
+    await page.waitForTimeout(300);
+    const activeKeys = (await keys()).filter((k) => !shown.includes(k));
+    const activeStates = activeKeys.map((k) => q.entries.find((e) => e.key === k)?.state);
+    const runningLast = activeStates.every((s, i) => s !== 'running' || activeStates.slice(i).every((t) => t === 'running'));
+    await page.locator('[data-quests-group="Active chats"]').click();
+    await page.locator('[data-quests-group="Tickets-Unclaimed"]').click();
+    await page.waitForTimeout(300);
+    const opened = (await keys()).length;
+    await page.locator('[data-quests-group="Tickets-Unclaimed"]').click();
+    const done = page.locator('[data-quests-done="button"]');
+    const doneEnabled = await done.isEnabled();
+    const box = page.locator('[data-chat-view="shown"] [data-slot="prompt-input-textarea"]').first();
+    await box.fill('x');
+    await page.waitForTimeout(300);
+    const doneWhileTyped = await done.isEnabled();
+    await box.fill('');
+    await page.waitForTimeout(300);
+    console.log(JSON.stringify({
+      linesAsExpected: JSON.stringify(shown) === JSON.stringify(expected), lines: shown.length, pending, active, unclaimed,
+      activeChats: activeKeys.length, expectedActive: view.filter((e) => !e.waitsForMe && e.state !== 'unclaimed' && e.placement === 'queue').length, runningLast,
+      openedUnclaimed: opened - shown.length, expectedUnclaimed: view.filter((e) => e.state === 'unclaimed' && e.placement === 'queue').length,
+      doneEnabled, doneWhileTyped, viewLines: view.length,
+    }));
+  }
+
+  if (check === 'dragtop') {
+    // Drag the last line of the first group, then the first line of the second group, onto the upper half of the
+    // top line: where each lands in the view, and in the stored order. The order is put back after.
+    const before = await apiQueue();
+    const keysNow = () => page.locator('[data-quests-queue="list"] [data-queue-key]').evaluateAll((ns) => ns.map((n) => n.dataset.queueKey));
+    const groupOf = (k) => before.entries.find((e) => e.key === k)?.group;
+    const shown = await keysNow();
+    const roots = shown.filter((k) => { const e = before.entries.find((e) => e.key === k); return e.rootKey === k && e.state !== 'permission'; });
+    const picks = [[...roots].reverse().find((k) => groupOf(k) === 0), roots.find((k) => groupOf(k) === 1)].filter(Boolean);
+    const results = [];
+    for (const key of picks) {
+      const from = await page.locator(`[data-queue-key="${key}"]`).boundingBox();
+      const top = await page.locator(`[data-queue-key="${shown[0]}"]`).boundingBox();
+      await page.mouse.move(from.x + 40, from.y + from.height / 2);
+      await page.mouse.down();
+      for (let i = 1; i <= 10; i++) await page.mouse.move(top.x + 40, from.y + (top.y + 3 - from.y) * (i / 10));
+      await page.waitForTimeout(200);
+      await page.mouse.up();
+      await page.waitForTimeout(2000);
+      const after = await apiQueue();
+      results.push({ key, group: groupOf(key), viewIndexBefore: shown.indexOf(key), viewIndexAfter: (await keysNow()).indexOf(key), orderIndexAfter: after.order.indexOf(key), latch: after.latch });
+      await page.evaluate(async (order) => fetch('/api/quests/queue/order', {
+        method: 'PUT', headers: { Authorization: `Bearer ${localStorage.getItem('auth-token')}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order }),
+      }), before.order);
+      await page.waitForTimeout(2000);
+    }
+    console.log(JSON.stringify({ top: shown[0], results }));
+  }
+
+  if (check === 'dropline') {
+    // Dragging a line keeps the list still and shows one blue landing line; released outside the list, nothing moves.
+    const before = await apiQueue();
+    const keysNow = () => page.locator('[data-quests-queue="list"] [data-queue-key]').evaluateAll((ns) => ns.map((n) => n.dataset.queueKey));
+    const shown = await keysNow();
+    const root = shown.find((k) => before.entries.find((e) => e.key === k).rootKey === k && before.entries.find((e) => e.key === k).state !== 'permission' && k !== before.latch);
+    const from = await page.locator(`[data-queue-key="${root}"]`).boundingBox();
+    const to = await page.locator(`[data-queue-key="${shown[shown.indexOf(root) + 3]}"]`).boundingBox();
+    await page.mouse.move(from.x + 40, from.y + from.height / 2);
+    await page.mouse.down();
+    const samples = [];
+    for (let i = 1; i <= 10; i++) {
+      await page.mouse.move(to.x + 40, from.y + (to.y + to.height * 0.75 - from.y) * (i / 10));
+      await page.waitForTimeout(150);
+      samples.push({ same: JSON.stringify(await keysNow()) === JSON.stringify(shown), markers: await page.locator('[data-quests-queue="list"] .bg-\\[\\#3794ff\\]').count() });
+    }
+    await page.mouse.move(to.x + 40, to.y + 2000);
+    await page.mouse.up();
+    await page.waitForTimeout(1500);
+    console.log(JSON.stringify({ root, samples, orderUnchanged: JSON.stringify((await apiQueue()).order) === JSON.stringify(before.order) }));
+    // A real drop on the lower half of that line: the root lands right below it. Then the order is put back.
+    const onto = shown[shown.indexOf(root) + 3];
+    await page.mouse.move(from.x + 40, from.y + from.height / 2);
+    await page.mouse.down();
+    for (let i = 1; i <= 10; i++) await page.mouse.move(to.x + 40, from.y + (to.y + to.height * 0.75 - from.y) * (i / 10));
+    await page.mouse.up();
+    await page.waitForTimeout(2000);
+    const landed = await keysNow();
+    await page.evaluate(async (order) => fetch('/api/quests/queue/order', {
+      method: 'PUT', headers: { Authorization: `Bearer ${localStorage.getItem('auth-token')}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order }),
+    }), before.order);
+    console.log(JSON.stringify({ onto, landedRightBelow: landed.indexOf(root) === landed.indexOf(onto) + 1,
+      restored: JSON.stringify((await apiQueue()).order) === JSON.stringify(before.order) }));
+  }
+
+  if (check === 'split') {
+    // A tab dropped on the right half of the chat opens in the right pane; dropped on the left half, it is shown on
+    // the left and the chat that was there moves to the right pane. Uses this headless browser's own tabs only.
+    const other = (await apiQueue()).entries.find((e) => e.sessionId && e.sessionId !== sessionId).sessionId;
+    await page.goto(`http://127.0.0.1:3001/session/${other}`);
+    await page.waitForTimeout(4000);
+    const panes = () => page.evaluate(() => JSON.parse(localStorage.getItem('quests-panes') || '{}'));
+    const dragTabTo = async (id, xShare) => {
+      const tabs = await page.locator('[data-quests-tabs="row"] > [draggable="true"]').evaluateAll((ns) => ns.map((n) => n.getBoundingClientRect().toJSON()));
+      const p = await panes();
+      const all = [...p.left, ...p.right];
+      const box = tabs[all.indexOf(id)];
+      const area = await page.locator('[data-chat-view="shown"] .chat-messages-pane').first().boundingBox();
+      await page.mouse.move(box.x + 20, box.y + box.height / 2);
+      await page.mouse.down();
+      for (let i = 1; i <= 10; i++) await page.mouse.move(box.x + 20 + (area.x + area.width * xShare - box.x - 20) * (i / 10), box.y + (area.y + area.height / 2 - box.y) * (i / 10));
+      await page.mouse.up();
+      await page.waitForTimeout(2500);
+    };
+    const start = await panes();
+    await dragTabTo(sessionId, 0.8);
+    const right = { panes: await panes(), url: await page.evaluate(() => location.pathname) };
+    await dragTabTo(sessionId, 0.2);
+    const left = { panes: await panes(), url: await page.evaluate(() => location.pathname) };
+    console.log(JSON.stringify({ sessionId, other, start, right, left, latch: (await apiQueue()).latch }, null, 1));
+    if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT });
+  }
+
+  if (check === 'colors') {
+    // Static: every family keeps its color after the first line moves to the bottom and after a reload (the order
+    // is put back). Distinct: families wear different colors while there are at most ten.
+    const colorsNow = async () => Object.fromEntries((await listRows()).map((r) => [r.key, r.color]));
+    const putOrder = (order) => page.evaluate(async (order) => fetch('/api/quests/queue/order', {
+      method: 'PUT', headers: { Authorization: `Bearer ${localStorage.getItem('auth-token')}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ order }),
+    }), order);
+    const before = await colorsNow();
+    const q = await apiQueue();
+    const root = new Map(q.entries.map((e) => [e.key, e.rootKey]));
+    const families = new Map(Object.entries(before).map(([k, c]) => [root.get(k), c]));
+    const openFamilies = new Map(q.entries.filter((e) => e.group === 0).map((e) => [e.rootKey, families.get(e.rootKey)]));
+    await putOrder([...q.order.filter((k) => k !== q.view[0]), q.view[0]]);
+    await page.waitForTimeout(2500);
+    const afterDrag = await colorsNow();
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForTimeout(2500);
+    const afterReload = await colorsNow();
+    await putOrder(q.order);
+    const changed = (a) => Object.keys(before).filter((k) => a[k] !== before[k]);
+    console.log(JSON.stringify({ lines: Object.keys(before).length, families: families.size, colors: new Set(families.values()).size,
+      openFamilies: openFamilies.size, openColors: new Set(openFamilies.values()).size, changedByMove: changed(afterDrag), changedByReload: changed(afterReload) }));
+  }
+
+  if (check === 'synccursor') {
+    // "Sync from Cursor" puts the chats open in Cursor on top of the list (it changes the real order, as asked) and
+    // makes them the left pane's tabs, showing the first. Every line's name starts at the same x (no false indent).
+    const lines = async () => page.locator('[data-quests-queue="list"] [data-queue-key]').evaluateAll((ns) => ns.slice(0, 9).map((n) => n.title));
+    const state = async () => page.evaluate(() => ({ url: location.pathname, left: JSON.parse(localStorage.getItem('quests-panes') || '{}').left }));
+    const before = { lines: await lines(), ...(await state()) };
+    await page.locator('[data-quests-queue="sync-cursor"]').click();
+    await page.waitForTimeout(3000);
+    // The text of every line (a ticket's "#n", a chat's name) starts at the same x: no false indent.
+    const textX = await page.locator('[data-quests-queue="list"] [data-queue-key]').evaluateAll((ns) => [...new Set(ns.map((n) =>
+      Math.round((n.querySelector('a[title^="Ticket #"]') ?? n.querySelector('span.truncate')).getBoundingClientRect().left)))]);
+    console.log(JSON.stringify({ before, after: { lines: await lines(), ...(await state()) }, textX, latch: (await apiQueue()).latch }, null, 1));
+    if (process.env.SHOT) await page.screenshot({ path: process.env.SHOT });
+  }
+
+  if (check === 'newtab') {
+    // The "+" tab opens a new empty chat; back on the chat, a double-click on the empty part of the tab row does too.
+    const state = async () => page.evaluate(() => ({
+      url: location.pathname,
+      tabs: JSON.parse(localStorage.getItem('quests-panes') || '{}').left,
+      input: Boolean(document.querySelector('[data-chat-view="shown"] [data-slot="prompt-input-textarea"]')),
+    }));
+    await page.locator('[data-quests-tab="new"]').first().click();
+    await page.waitForTimeout(2000);
+    const plus = await state();
+    await page.goto(`http://127.0.0.1:3001/session/${sessionId}`);
+    await page.waitForTimeout(4000);
+    const row = await page.locator('[data-quests-tab="new"]').first().evaluate((b) => b.parentElement.getBoundingClientRect().toJSON());
+    await page.mouse.dblclick(row.right - 30, row.top + row.height / 2);
+    await page.waitForTimeout(2000);
+    console.log(JSON.stringify({ plus, doubleClick: await state() }));
+  }
+
+  if (check === 'modecolors') {
+    const button = page.locator('button[title$="(Shift+Tab)"]');
+    await page.locator('[data-chat-view="shown"] [data-slot="prompt-input-textarea"]').first().focus();
+    const start = await button.innerText();
+    for (let i = 0; i < 8; i += 1) {
+      const look = await button.evaluate((b) => { const c = getComputedStyle(b); return { color: c.color, background: c.backgroundColor }; });
+      console.log(JSON.stringify({ mode: await button.innerText(), ...look }));
+      await page.keyboard.press('Shift+Tab');
+      await page.waitForTimeout(300);
+      if ((await button.innerText()) === start) break;
+    }
+    console.log('back at start:', (await button.innerText()) === start);
+  }
+
+  if (check === 'mode') {
+    const button = page.locator('button[title$="(Shift+Tab)"]');
+    console.log('mode shown:', await button.innerText());
+    await page.locator('[data-chat-view="shown"] [data-slot="prompt-input-textarea"]').first().focus();
+    await page.keyboard.press('Shift+Tab');
+    await page.waitForTimeout(300);
+    console.log('after Shift+Tab:', await button.innerText());
+    await page.keyboard.press('Tab');
+    await page.waitForTimeout(300);
+    console.log('after plain Tab:', await button.innerText());
+  }
+
+  await browser.close();
+})();

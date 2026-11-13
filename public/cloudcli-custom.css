@@ -1,0 +1,130 @@
+/* Our changes to CloudCLI UI, loaded by its page (see index.html). */
+
+/* Cursor's look, from ~/.config/Cursor/User/settings.json (workbench.colorCustomizations):
+   editor #1E1F22, sidebar #1a1a1c, widgets #353535, status bar #2B2D30, active tab #3d5984;
+   text #cccccc, the chat text of Cursor's Claude panel.
+   html.dark outranks the app's own .dark rule. */
+html.dark {
+  --background: 225 6% 13%;
+  --foreground: 0 0% 80%;
+  --card: 240 4% 11%;
+  --card-foreground: 0 0% 80%;
+  --popover: 216 5% 18%;
+  --popover-foreground: 0 0% 80%;
+  --primary: 216 37% 38%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 216 5% 18%;
+  --secondary-foreground: 0 0% 80%;
+  --muted: 216 5% 18%;
+  --muted-foreground: 210 1% 50%;  /* #7f8081, Cursor gray text ("Thought for 1s") */
+  --accent: 216 5% 18%;
+  --accent-foreground: 0 0% 80%;
+  --border: 210 1% 27%;  /* #454647, Cursor tool-box and table borders */
+  --input: 0 0% 21%;
+  --ring: 216 37% 38%;
+}
+/* Cursor's fonts: the system UI font for text (the app uses serif for chat), Droid Sans Mono for code. */
+html, body, .font-serif, .font-sans { font-family: system-ui, Ubuntu, "Droid Sans", sans-serif !important; }
+code, pre, kbd, .font-mono { font-family: "Droid Sans Mono", monospace !important; }
+
+/* Text size. --base is the size of normal text; every other text size follows it.
+   Only font sizes change: spacing, icons and layout stay as they are. The slider in cloudcli-custom.js sets --base.
+   19.75px is Cursor's chat text size (claudeCodeUiPatch.chatHistoryFontSize).
+   --base-eff is what the rules read: --base everywhere, and inside the transcript --base times --quests-chat-scale,
+   the pinch and Ctrl+= scale of src/shared/hooks/useTextScale.ts (Noam, 3 Nov: "only the text to change size in
+   the chat, not the menus"). */
+:root { --base: 19.75px; --base-eff: var(--base); }
+.chat-messages-pane { --base-eff: calc(var(--base) * var(--quests-chat-scale, 1)); font-size: var(--base-eff); }
+.text-base { font-size: var(--base-eff) !important; line-height: 1.5 !important; }
+.text-lg   { font-size: calc(var(--base-eff) * 1.125) !important; line-height: 1.5 !important; }
+.text-sm, .prose-sm { font-size: calc(var(--base-eff) * .875) !important; line-height: 1.5 !important; }
+.text-xs   { font-size: calc(var(--base-eff) * .75) !important; line-height: 1.4 !important; }
+.text-\[14px\] { font-size: calc(var(--base-eff) * .875) !important; }
+.text-\[13px\] { font-size: calc(var(--base-eff) * .8125) !important; }
+.text-\[12px\] { font-size: calc(var(--base-eff) * .75) !important; }
+.text-\[11px\] { font-size: calc(var(--base-eff) * .6875) !important; }
+.text-\[10px\] { font-size: calc(var(--base-eff) * .625) !important; }
+
+/* Sidebar: "New Session" fades into the background; the open chat takes the button's old blue. */
+.border-l.pl-3 button.bg-primary.w-full {
+  background-color: hsl(var(--muted) / .5) !important; color: hsl(var(--muted-foreground)) !important;
+}
+.border-l.pl-3 button.bg-primary.w-full:hover { background-color: hsl(var(--muted)) !important; }
+.bg-primary\/5.border-primary\/20 {
+  background-color: hsl(var(--primary)) !important; border-color: hsl(var(--primary)) !important;
+}
+.bg-primary\/5.border-primary\/20 .text-foreground,
+.bg-primary\/5.border-primary\/20 .text-muted-foreground { color: hsl(var(--primary-foreground)) !important; }
+
+/* Tool calls collapse to a 1px line, clickable over 7px; open, the same line on top closes it again.
+   A tool call is a group (.chat-message.tool) or an assistant message without the plain-text block
+   (div[dir=auto]); anything with an input field (a question waiting for an answer) never collapses.
+   Pure CSS, so a row is collapsed from its first render and the scroll height never jumps; the chat pane adds
+   qt-open to the ones you open (row state by row id, src/modules/chat/ledger/rowOpen.ts). ponytail: matches the
+   app's markup, re-check after an upstream merge. */
+:is(.chat-message.tool, .chat-message.assistant:not(:has(> .w-full > .w-full > div[dir="auto"]))):not(:has(input, textarea)):not(.qt-open) {
+  height: 7px !important; min-height: 0 !important; overflow: hidden !important;
+  padding: 0 !important; margin: 2px 0 !important; cursor: pointer;
+  background: linear-gradient(transparent 3px, rgba(127,127,127,.6) 3px, rgba(127,127,127,.6) 4px, transparent 4px);
+}
+:is(.chat-message.tool, .chat-message.assistant:not(:has(> .w-full > .w-full > div[dir="auto"]))):not(:has(input, textarea)):not(.qt-open) > * { visibility: hidden; }
+.chat-message.qt-open {
+  padding-top: 7px !important;
+  background: linear-gradient(transparent 3px, rgba(127,127,127,.6) 3px, rgba(127,127,127,.6) 4px, transparent 4px) top / 100% 7px no-repeat;
+}
+
+/* Chat input, colors measured from a screenshot of Cursor's Claude panel. */
+[data-slot="prompt-input"] {
+  background: #3c3c3c !important; border: 1px solid #505050 !important; border-radius: 6px !important;
+  box-shadow: none !important; backdrop-filter: none !important;
+}
+[data-slot="prompt-input"]:focus-within { border-color: #ff7570 !important; box-shadow: none !important; --tw-ring-shadow: 0 0 #0000 !important; }
+[data-slot="prompt-input-footer"] { border-top-color: #505050 !important; }
+[data-slot="prompt-input-textarea"]::placeholder { color: #a6a6a6 !important; }
+[data-slot="prompt-input"] button[type="submit"] { background: #8a5351 !important; color: #ffffff !important; }
+
+/* Replies: tables, code and links as Cursor renders them. */
+.prose a { color: #3794ff !important; }
+.prose code:not(pre code) {
+  background: rgba(255, 255, 255, .1) !important; color: #d7ba7d !important;
+  padding: 1px 4px !important; border-radius: 3px !important; font-weight: 400 !important;
+}
+.prose code:not(pre code)::before, .prose code:not(pre code)::after { content: none !important; }
+.prose pre { background: #161718 !important; }
+.prose table { border-collapse: collapse !important; }
+.prose th, .prose td { border: 1px solid #454647 !important; padding: 4px 6px !important; color: #cccccc !important; }
+.prose th { font-weight: 700 !important; text-align: center !important; }
+
+/* Chat input sizes, measured from Cursor: a ~36px bottom row, 14px chips, no hint line.
+   The one-line text area is rows={1} in PromptInput.tsx. */
+[data-slot="prompt-input-footer"] { padding: 4px 8px !important; }
+[data-slot="prompt-input-footer"] > .basis-full { display: none !important; }
+[data-slot="prompt-input-footer"] * { font-size: 14px !important; line-height: 20px !important; }
+[data-slot="prompt-input-footer"] button { height: 26px !important; min-height: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important; }
+[data-slot="prompt-input-footer"] button.w-8, [data-slot="prompt-input-footer"] button[type="submit"] { width: 26px !important; }
+[data-slot="prompt-input-footer"] svg { width: 15px !important; height: 15px !important; }
+[data-slot="prompt-input-footer"] span.rounded-full.h-4 { font-size: 10px !important; line-height: 16px !important; }
+
+/* A collapsed tool call that starts a response draws the bold response line itself (its own <hr> is hidden). */
+:is(.chat-message.tool, .chat-message.assistant:not(:has(> .w-full > .w-full > div[dir="auto"]))):not(:has(input, textarea)):not(.qt-open):has(.quests-response-line) {
+  height: 9px !important;
+  background: linear-gradient(transparent 3px, hsl(var(--foreground) / .5) 3px, hsl(var(--foreground) / .5) 5px, transparent 5px) !important;
+}
+
+/* User messages, measured from Cursor: #3c3c3c box, 1px #575757 border, #cccccc text, ~4px corners. */
+.chat-message.user .rounded-2xl.border {
+  background: #3c3c3c !important; border: 1px solid #575757 !important; border-radius: 4px !important;
+  color: #cccccc !important; box-shadow: none !important;
+}
+.chat-message.user .rounded-2xl.border .prose { color: #cccccc !important; }
+
+/* Reply text, measured from Cursor: everything #cccccc, headings and bold included (not white). */
+.prose, .prose :where(p, li, strong, b, em, h1, h2, h3, h4, h5, h6, blockquote, td, th) { color: #cccccc !important; }
+/* Tool call boxes and their output, measured from Cursor: page background, 1px #454647 border, output #161718. */
+.chat-message pre { background: #161718 !important; }
+
+/* The pinned user message at the top of the chat (ChatMessagesPane), styled like a user message in Cursor. */
+.quests-sticky-user {
+  background: #3c3c3c; border: 1px solid #575757; border-radius: 4px; color: #cccccc;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .4);
+}
