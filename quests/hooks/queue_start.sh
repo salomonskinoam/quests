@@ -3,7 +3,7 @@
 # only in a repo with a quests.json (quests/plugin/run.sh). Prints the queue's rules into the chat: the reply format
 # (rules.sh), the family to notify, and (fresh start only) the name, with the repo's areas from its quests.json
 # (quests/INTERFACE.md). A failing gh never blocks a chat start.
-HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+HERE="$(cd "$(dirname "$0")" && pwd -P)"
 ROOT="$(dirname "$HERE")"
 in="$(cat)"
 sid="$(python3 -I "$HERE/jget.py" session_id <<<"$in")"

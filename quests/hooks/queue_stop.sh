@@ -2,7 +2,7 @@
 # quests priority queue: Stop hook, wired by the quests plugin (hooks.json).
 # Every reply must end with the queue's closing line, and a reply to the user's message must have a Summary line
 # (requirements 107, 112, 113). The hook only guards that they exist; the chat writes what the Summary holds. A failing reply goes back to the chat once.
-HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+HERE="$(cd "$(dirname "$0")" && pwd -P)"
 in="$(cat)"
 [ "$(python3 -I "$HERE/jget.py" stop_hook_active <<<"$in")" = "true" ] && exit 0  # the second try passes
 # A hook that cannot read the reply must never hold a chat: no reply text means nothing to check.

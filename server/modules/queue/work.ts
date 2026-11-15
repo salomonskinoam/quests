@@ -10,7 +10,7 @@ import path from 'node:path';
  * %TEMP%\claude\<folder>\<session id>\tasks instead, and only a file under %TEMP%\claude is served.
  */
 
-export const TASK_OUTPUT_FILE = /^\/tmp\/claude-[A-Za-z0-9_-]+\/(?!(?:.*\/)?\.\.(?:\/|$))[^\0]+$/;
+export const TASK_OUTPUT_FILE = /^(?:\/private)?\/tmp\/claude-[A-Za-z0-9_-]+\/(?!(?:.*\/)?\.\.(?:\/|$))[^\0]+$/;
 const WIN_ROOT = path.win32.join(os.tmpdir(), 'claude');
 /** Used by server/index.ts before it serves a file: true only for a file in Claude Code's task folder. */
 export const isTaskOutputFile = (file: string, platform: NodeJS.Platform = process.platform, winRoot = WIN_ROOT): boolean => {
@@ -30,7 +30,9 @@ export type OutputTail = { text: string; size: number; modifiedAt: number; trunc
  */
 export function findTaskOutputFile(providerSessionId: string, taskId: string): string | null {
   if (!/^[0-9a-f-]{36}$/.test(providerSessionId) || !/^[A-Za-z0-9_-]+$/.test(taskId)) return null;
-  const root = process.platform === 'win32' ? WIN_ROOT : path.join(os.tmpdir(), `claude-${os.userInfo().uid}`);
+  // macOS: os.tmpdir() is a per-user /var/folders path, but Claude Code writes under /tmp there too.
+  const tmp = process.platform === 'darwin' ? '/tmp' : os.tmpdir();
+  const root = process.platform === 'win32' ? WIN_ROOT : path.join(tmp, `claude-${os.userInfo().uid}`);
   let folders: string[];
   try {
     folders = readdirSync(root);

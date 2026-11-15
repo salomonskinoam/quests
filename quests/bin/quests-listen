@@ -26,7 +26,7 @@ PREFIX = ENV['QUESTS_UNIT_PREFIX']
 LOGS = os.path.expanduser('~/.local/state/quests/listeners')
 # Off Linux a listener is a detached process, its pid in the same folder the server reads
 # (server/modules/chat-hosts/units.ts).
-SYSTEMD = sys.platform.startswith('linux')
+SYSTEMD = sys.platform.startswith('linux') and os.path.isdir('/run/systemd/system')  # as units.ts decides it
 PIDS = os.path.expanduser(f'~/.local/state/{PREFIX}/units')
 
 if len(sys.argv) == 3 and sys.argv[1] == '--stop':

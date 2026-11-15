@@ -17,7 +17,9 @@ import { unitPrefix } from '@/shared/quests-instance.js';
 const run = promisify(execFile);
 
 /** True where systemd user units run the processes. */
-export const SYSTEMD = process.platform === 'linux';
+// /run/systemd/system exists only where systemd runs the machine: a Linux without it (a container, a plain WSL)
+// takes the detached-process way, like Windows and macOS.
+export const SYSTEMD = process.platform === 'linux' && fs.existsSync('/run/systemd/system');
 
 const pidDir = (): string => path.join(os.homedir(), '.local', 'state', unitPrefix(), 'units');
 const pidFile = (unit: string): string => path.join(pidDir(), `${unit}.pid`);

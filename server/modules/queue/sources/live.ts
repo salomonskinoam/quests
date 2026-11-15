@@ -28,7 +28,8 @@ export const hasLiveProcess = (sessionId: string): boolean => live.has(sessionId
 export async function refreshLive(): Promise<void> {
   const dir = path.join(os.homedir(), '.claude', 'sessions');
   const next = new Map<string, LiveProcess>();
-  for (const file of await fs.readdir(dir)) {
+  // No folder yet: Claude Code has run no session on this machine, so nothing is live.
+  for (const file of await fs.readdir(dir).catch(() => [] as string[])) {
     if (!file.endsWith('.json')) continue;
     let entry;
     try {
