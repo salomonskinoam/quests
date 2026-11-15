@@ -6,6 +6,8 @@ so you stop hunting through tabs and terminals.
 It runs on your own machine. It reads the chats Claude Code already saves, wherever you started them: Cursor, a
 terminal, the Claude desktop app, or the page itself.
 
+![The quests page: a chat, its Summary drawer, and the queue](quests/screenshots/overview.png)
+
 ## What you get
 
 - **A queue.** Every chat on the machine in one list. The chats that wait for you are on top, under "Pending chats".
@@ -47,6 +49,43 @@ lines install the plugin that gives chats their ending and their name question. 
    `quests.json` file in that repo. New chats there get the reply ending and the name question; chats that were
    already open do not.
 4. Click **Personalize** to set your name, your time zone, a tickets repo, and each repo's areas and closing steps.
+
+## Using the queue
+
+The queue is the sidebar. Its job is to hand you the next chat that needs you, so you never pick one by hand.
+
+![The queue with its drawers](quests/screenshots/queue.png)
+
+**The five drawers.** Every chat is in exactly one.
+
+| Drawer | What is in it |
+|---|---|
+| Pending chats | What needs you now: a permission prompt, a `question`, or a `Done` you have not approved. Open by default. |
+| Active chats | Every other chat. The running ones are last: they need nothing from you. |
+| On hold | Chats you put aside. A chat comes back by itself when it replies again. |
+| Tickets-Unclaimed | Open tickets no chat works on yet. Only with a tickets repo. |
+| Archived | Chats you are done with, newest first. |
+
+**Your order is the priority.** Drag a line up or down. The order is kept: a chat that leaves Pending and later
+returns comes back to its place. Hover a line for its buttons: move it to the queue's end, put it on hold, archive
+it, rename it. Hovering also says why the chat sits in its drawer.
+
+**Next.** The **Next** button beside the input box, or Alt+Enter, opens the highest chat in Pending that is not the
+one on screen. Alt+Enter with text typed sends the text first, then moves on. So the loop is: read the ending,
+answer, Alt+Enter, repeat until Pending is empty.
+
+![The status line and the Next and DONE buttons](quests/screenshots/next.png)
+
+**DONE.** For a chat whose work you accept. It asks whether to finalize first: Yes sends `/quests:finalize-chat`
+to the chat (your repo's closing steps), then hides the chat and opens the next one. No only hides it and opens the
+next one.
+
+**The status line** above the input box says what the chat on screen is doing: "Waiting on you: question ...",
+"Running a tool ...", or how long the turn has run.
+
+**The Summary drawer.** The thin "Summary" strip between the chat and the queue. Click it to keep the last reply's
+Summary, Running and Required from you in view while you scroll the chat. Its "About" box asks a side question
+about the chat ("what is this chat about?") in a copy of the conversation, so the chat itself is not disturbed.
 
 ## Settings
 
