@@ -16,7 +16,7 @@ and the repo.
 
 ## The user side: `~/.config/quests/user.env`
 
-Plain `KEY=value` lines. Every one is optional and has a default (`quests/README.md`, "Settings"); the Personalize form of the page writes the first three.
+Plain `KEY=value` lines. Every one is optional and has a default (`README.md` at the root, "Settings"); the Personalize form of the page writes the first three.
 
 | Key | Meaning | Example |
 |---|---|---|

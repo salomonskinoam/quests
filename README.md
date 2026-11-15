@@ -1,269 +1,109 @@
-<div align="center">
- <img src="public/logo.svg" alt="CloudCLI UI" width="64" height="64">
- <h1>Cloud CLI (aka Claude Code UI)</h1>
- <p>A desktop and mobile UI for <a href="https://docs.anthropic.com/en/docs/claude-code">Claude Code</a>, <a href="https://docs.cursor.com/en/cli/overview">Cursor CLI</a>, and <a href="https://developers.openai.com/codex">Codex</a>.<br>Use it locally or remotely to view your active projects and sessions from everywhere.</p>
-</div>
+# quests
 
-<p align="center">
- <a href="https://cloudcli.ai">CloudCLI Cloud</a> · <a href="https://cloudcli.ai/docs">Documentation</a> · <a href="https://discord.gg/buxwujPNRE">Discord</a> · <a href="https://github.com/siteboon/claudecodeui/issues">Bug Reports</a> · <a href="CONTRIBUTING.md">Contributing</a>
-</p>
+One page for all your Claude Code chats. It shows which chats wait for you, which are running, and which are done,
+so you stop hunting through tabs and terminals.
 
-<p align="center">
- <a href="https://cloudcli.ai"><img src="https://img.shields.io/badge/☁️_CloudCLI_Cloud-Try_Now-0066FF?style=for-the-badge" alt="CloudCLI Cloud"></a>
- <a href="https://discord.gg/buxwujPNRE"><img src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Join our Discord"></a>
- <br><br>
- <a href="https://trendshift.io/repositories/15586" target="_blank"><img src="https://trendshift.io/api/badge/repositories/15586" alt="siteboon%2Fclaudecodeui | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-</p>
+It runs on your own machine. It reads the chats Claude Code already saves, wherever you started them: Cursor, a
+terminal, the Claude desktop app, or the page itself.
 
-<div align="right"><i><b>English</b> · <a href="./docs/README.ru.md">Русский</a> · <a href="./docs/README.de.md">Deutsch</a> · <a href="./docs/README.ko.md">한국어</a> · <a href="./docs/README.zh-CN.md">简体中文</a> · <a href="./docs/README.zh-TW.md">繁體中文</a> · <a href="./docs/README.ja.md">日本語</a> · <a href="./docs/README.tr.md">Türkçe</a> · <a href="./docs/README.id.md">Bahasa Indonesia</a></i></div>
+## What you get
 
----
+- **A queue.** Every chat on the machine in one list. The chats that wait for you are on top, under "Pending chats".
+  Every other chat is under "Active chats", the running ones last.
+- **Chats that say what they need.** In a repo with quests on, every reply ends the same way: a short summary, what
+  is running, what is required from you, and one status line (`question`, `waiting for`, `blocker` or `Done`). The
+  queue reads that line. You read the three lines above it and know what to do without scrolling.
+- **Named chats.** A new chat first asks you to confirm its name, like `nov_15 backend login fix`, so the list stays
+  readable.
+- **Tabs and split screen.** Open chats as tabs, two panes side by side. One dot per chat: blue waits for you, green
+  is running, orange finished while you were away.
+- **Answer from the page.** Start a chat, send a message, answer a question, or approve a permission prompt. A chat
+  that runs in Cursor shows its permission prompt on the page too, with one click to bring its Cursor tab to the front.
+- **Tickets, if you want them.** Point it at a GitHub repo and its open issues join the queue. A chat can claim one.
+- **A closing routine.** `/quests:finalize-chat` runs your repo's closing steps (for example: tests, commit, push).
 
-## Screenshots
+## Install
 
-<div align="center">
-
-<table>
-<tr>
-<td align="center">
-<h3>Desktop View</h3>
-<img src="public/screenshots/desktop-main.png" alt="Desktop Interface" width="400">
-<br>
-<em>Main interface showing project overview and chat</em>
-</td>
-<td align="center">
-<h3>Mobile Experience</h3>
-<img src="public/screenshots/mobile-chat.png" alt="Mobile Interface" width="250">
-<br>
-<em>Responsive mobile design with touch navigation</em>
-</td>
-</tr>
-<tr>
-<td align="center" colspan="2">
-<h3>CLI Selection</h3>
-<img src="public/screenshots/cli-selection.png" alt="CLI Selection" width="400">
-<br>
-<em>Select between Claude Code, Cursor CLI and Codex</em>
-</td>
-</tr>
-</table>
-
-
-
-</div>
-
-## Features
-
-- **Responsive Design** - Works seamlessly across desktop, tablet, and mobile so you can also use Agents from mobile 
-- **Interactive Chat Interface** - Built-in chat interface for seamless communication with the Agents
-- **Integrated Shell Terminal** - Direct access to the Agents CLI through built-in shell functionality
-- **File Explorer** - Interactive file tree with syntax highlighting and live editing
-- **Git Explorer** - View, stage and commit your changes. You can also switch branches 
-- **Browser Use** - Open browser sessions for web research, testing, and agent-driven browser tasks
-- **Session Management** - Resume conversations, manage multiple sessions, and track history
-- **Plugin System** - Extend CloudCLI with custom plugins — add new tabs, backend services, and integrations. [Build your own →](https://github.com/cloudcli-ai/cloudcli-plugin-starter)
-- **TaskMaster AI Integration** *(Optional)* - Advanced project management with AI-powered task planning, PRD parsing, and workflow automation
-- **Model Compatibility** - Works with Claude and GPT model families (the full list of supported models is available at runtime via `GET /api/providers/:provider/models`)
-
-
-## Quick Start
-
-### CloudCLI Cloud (Recommended)
-
-The fastest way to get started — no local setup required. Get a fully managed, containerized development environment accessible from the web, mobile app, API, or your favorite IDE.
-
-**[Get started with CloudCLI Cloud](https://cloudcli.ai)**
-
-### Self-Hosted (Open source)
-
-#### npm
-
-Try CloudCLI UI instantly with **npx** (requires **Node.js** v22+):
+You need Node 22 or newer, Python 3, and Claude Code. On Windows you also need Git Bash, which Claude Code needs
+there anyway. You need `gh`, logged in, only for tickets.
 
 ```
-npx @cloudcli-ai/cloudcli
+git clone https://github.com/salomonskinoam/quests.git && cd quests
+npm install
+npm run build
+bash scripts/start-local.sh
+claude plugin marketplace add "$PWD"
+claude plugin install quests@quests --scope user
 ```
 
-Or install **globally** for regular use:
+The page is at http://localhost:3001. `start-local.sh` keeps running; leave its terminal open. The two `claude`
+lines install the plugin that gives chats their ending and their name question. Run them once, in a second terminal.
 
-```
-npm install -g @cloudcli-ai/cloudcli
-cloudcli
-```
+## First use
 
-Open `http://localhost:3001` — all your existing sessions are discovered automatically.
+1. Open http://localhost:3001 and create the account. There is one account per server, and it stays signed in.
+2. You already see every chat on the machine. Nothing else is required.
+3. The sidebar shows a line for repos where quests is off. Click **Turn on** for a repo. This writes a small
+   `quests.json` file in that repo. New chats there get the reply ending and the name question; chats that were
+   already open do not.
+4. Click **Personalize** to set your name, your time zone, a tickets repo, and each repo's areas and closing steps.
 
-Visit the **[documentation →](https://cloudcli.ai/docs)** for full configuration options, PM2, remote server setup and more.
+## Settings
 
-#### Docker Sandboxes (Experimental)
+Everything is optional. The Personalize form writes the rows marked "form". The rest are files you edit.
 
-Run agents in isolated sandboxes with hypervisor-level isolation. Starts Claude Code by default. Requires the [`sbx` CLI](https://docs.docker.com/ai/sandboxes/get-started/).
-
-```
-npx @cloudcli-ai/cloudcli@latest sandbox ~/my-project
-```
-
-Supports Claude Code and Codex. See the [sandbox docs](docker/) for setup and advanced options.
-
-### Desktop Companion App
-
-CloudCLI Desktop is an optional native companion for CloudCLI Cloud and Local CloudCLI. It ships from this repository's GitHub Releases and keeps CloudCLI available from your menu bar or tray.
-
-- **[macOS](https://cloudcli.ai/download/macos)**
-- **[Windows](https://cloudcli.ai/download/windows)**
-- **[Download page](https://cloudcli.ai/download)** · **[GitHub Releases and checksums](https://github.com/siteboon/claudecodeui/releases)**
-
-Use it to open CloudCLI Cloud environments, switch between local and remote workspaces, and copy mobile/browser URLs. To work locally, choose **Local CloudCLI** in the desktop app; it will use your running local server or start one for you.
-
-
----
-
-## Which option is right for you?
-
-CloudCLI UI is the open source UI layer that powers CloudCLI Cloud. You can self-host it on your own machine, run it in a Docker sandbox for isolation, or use CloudCLI Cloud for a fully managed environment.
-
-| | Self-Hosted (npm) | Self-Hosted (Docker Sandbox) *(Experimental)* | CloudCLI Cloud |
+| Where | Key | What it does | Default |
 |---|---|---|---|
-| **Best for** | Local agent sessions on your own machine | Isolated agents with web/mobile IDE | Teams who want agents in the cloud |
-| **How you access it** | Browser via `[yourip]:port` | Browser via `localhost:port` | Browser, any IDE, REST API, n8n |
-| **Setup** | `npx @cloudcli-ai/cloudcli` | `npx @cloudcli-ai/cloudcli@latest sandbox ~/project` | No setup required |
-| **Isolation** | Runs on your host | Hypervisor-level sandbox (microVM) | Full cloud isolation |
-| **Machine needs to stay on** | Yes | Yes | No |
-| **Mobile access** | Any browser on your network | Any browser on your network | Any device |
-| **Desktop companion** | Optional. Choose Local CloudCLI | Optional. Choose Local CloudCLI | Optional. Opens cloud environments |
-| **Agents supported** | Claude Code, Cursor CLI, Codex | Claude Code, Codex | Claude Code, Cursor CLI, Codex |
-| **File explorer and Git** | Yes | Yes | Yes |
-| **MCP configuration** | Synced with `~/.claude` | Managed via UI | Managed via UI |
-| **REST API** | Yes | Yes | Yes |
-| **Team sharing** | No | No | Yes |
-| **Platform cost** | Free, open source | Free, open source | Starts at €7/month |
+| `~/.config/quests/user.env` | `QUESTS_USER` (form) | your name, as the chats address you | your login name |
+| | `QUESTS_TZ` (form) | time zone of the times shown, like `Europe/Paris` | the system's |
+| | `TICKETS_REPO` (form) | GitHub repo `owner/name` whose open issues join the queue; set it up once with `quests/bin/quests-init-tickets owner/name` | none: the queue holds chats only |
+| | `QUESTS_HOME` | the quests checkout the plugin's hooks run from | the folder given to `claude plugin marketplace add` |
+| `<repo>/quests.json` | the file itself (form) | turns quests on for that repo; `{}` is enough | off |
+| | `areas` (form) | a command printing the repo's areas, one per line; an area is the second word of a chat name | one area, `general` |
+| | `finish` (form) | a markdown file with the repo's closing steps | commit the chat's changes, no push |
+| | `finish_command` (form) | the command that is the last closing step | none |
+| | `drawer_question` (form) | the first question the Summary drawer offers | none |
+| `~/.config/quests/<instance>.env` | `SERVER_PORT` | the page's port | `3001` |
+| | `PROJECT_ROOTS` | the repos this server shows, `:`-separated (`;` on Windows) | every repo |
+| | `DATABASE_PATH` | the server's database | `~/.config/quests/<instance>.db` |
+| | `QUESTS_UNIT_PREFIX` | names its chat processes | `quests` (`quests-<instance>` for another server) |
+| | `QUESTS_CHECKOUT` | the checkout this server runs from | this one |
 
-> All options use your own AI subscriptions (Claude, Cursor, etc.) — CloudCLI provides the environment, not the AI.
+One server is enough for any number of repos. A second server, with its own port, account and repos, is one more
+`<instance>.env` file and `bash scripts/start-local.sh <instance>`.
 
----
+## How a chat reports its status
 
-## Security & Tools Configuration
+Nothing is hidden and no repo needs its own prompt file. The plugin gives each chat of a quests repo the format at
+its start, and checks each reply when it ends. A reply without the ending is sent back once, to add the ending only.
 
-**🔒 Important Notice**: All Claude Code tools are **disabled by default**. This prevents potentially harmful operations from running automatically.
+```
+**Summary**
+- "can you fix the login?": fixed, the session cookie was dropped on redirect.
 
-### Enabling Tools
+**Running:** nothing
 
-To use Claude Code's full functionality, you'll need to manually enable tools:
+**Required from you:** try to log in once.
 
-1. **Open Tools Settings** - Click the gear icon in the sidebar
-2. **Enable Selectively** - Turn on only the tools you need
-3. **Apply Settings** - Your preferences are saved locally
+question does the login work for you now?
+```
 
-<div align="center">
+The last line is the status. `question` and `Done` put the chat under Pending chats. `waiting for` and `blocker`
+keep it under Active chats while it still runs.
 
-![Tools Settings Modal](public/screenshots/tools-modal.png)
-*Tools Settings interface - enable only what you need*
+## Good to know
 
-</div>
+- The server listens on this machine only (127.0.0.1).
+- Tested on Windows 11 and on Ubuntu. macOS uses the same code paths as Windows for its processes, but nobody has
+  run it there yet.
+- Starting at login and the in-app Update button work on Linux with systemd only. Elsewhere, start it with
+  `bash scripts/start-local.sh` and update with `git pull && npm install && npm run build`.
+- A chat that is open in Cursor is read live, but messages to it are sent in Cursor, so one chat never has two
+  processes.
 
-**Recommended approach**: Start with basic tools enabled and add more as needed. You can always adjust these settings later.
+## More
 
----
+- How it is built: [quests/README.md](quests/README.md)
+- The contract between quests, you and a repo: [quests/INTERFACE.md](quests/INTERFACE.md)
 
-## Plugins
-
-CloudCLI has a plugin system that lets you add custom tabs with their own frontend UI and optional Node.js backend. Install plugins from git repos directly in **Settings > Plugins**, or build your own.
-
-### Available Plugins
-
-| Plugin | Description |
-|---|---|
-| **[Project Stats](https://github.com/cloudcli-ai/cloudcli-plugin-starter)** | Shows file counts, lines of code, file-type breakdown, largest files, and recently modified files for your current project |
-| **[Web Terminal](https://github.com/cloudcli-ai/cloudcli-plugin-terminal)** | Full xterm.js terminal with multi-tab support |
-| **[Claude Watch](https://github.com/satsuki19980613/cloudcli-claude-watch)** | Watches long-running Claude Code sessions for hangs and exposes process controls |
-| **[CloudCLI Scheduler](https://github.com/grostim/cloudcli-cron)** | Create workspace-scoped scheduled prompts and execute them through a local CLI such as Codex or Claude Code |
-| **[PRISM CloudCLI](https://github.com/jakeefr/cloudcli-plugin-prism)** | Session intelligence for Claude Code inside CloudCLI, including token burn visibility |
-| **[Sessions](https://github.com/strykereye2/cloudcli-plugin-session-manager)** | View, manage, and kill active Claude Code sessions |
-| **[Token Cost Calculator](https://github.com/NightmareAway/cloudcli-plugin-token-cost-calculator)** | Calculate API costs from model prices and token usage, with preset model pricing support |
-| **[Task Queue](https://github.com/TadMSTR/cloudcli-plugin-task-queue)** | Task queue dashboard to view, filter, and launch agent tasks |
-| **[GitHub Issues Board](https://github.com/szmidtpiotr/claude-github-issue)** | Kanban board for GitHub Issues with bidirectional TaskMaster sync and /github-task CLI skill auto-install |
-
-### Build Your Own
-
-**[Plugin Starter Template →](https://github.com/cloudcli-ai/cloudcli-plugin-starter)** — fork this repo to create your own plugin. It includes a working example with frontend rendering, live context updates, and RPC communication to a backend server.
-
-**[Plugin Documentation →](https://cloudcli.ai/docs/plugin-overview)** — full guide to the plugin API, manifest format, security model, and more.
-
----
-## FAQ
-
-<details>
-<summary>How is this different from Claude Code Remote Control?</summary>
-
-Claude Code Remote Control lets you send messages to a session already running in your local terminal. Your machine has to stay on, your terminal has to stay open, and sessions time out after roughly 10 minutes without a network connection.
-
-CloudCLI UI and CloudCLI Cloud extend Claude Code rather than sit alongside it — your MCP servers, permissions, settings, and sessions are the exact same ones Claude Code uses natively. Nothing is duplicated or managed separately.
-
-Here's what that means in practice:
-
-- **All your sessions, not just one** — CloudCLI UI auto-discovers every session from your `~/.claude` folder. Remote Control only exposes the single active session to make it available in the Claude mobile app.
-- **Your settings are your settings** — MCP servers, tool permissions, and project config you change in CloudCLI UI are written directly to your Claude Code config and take effect immediately, and vice versa.
-- **Works with more agents** — Claude Code, Cursor CLI and Codex, not just Claude Code.
-- **Full UI, not just a chat window** — file explorer, Git integration, MCP management, and a shell terminal are all built in.
-- **CloudCLI Cloud runs in the cloud** — close your laptop, the agent keeps running. No terminal to babysit, no machine to keep awake.
-
-</details>
-
-<details>
-<summary>Do I need to pay for an AI subscription separately?</summary>
-
-Yes. CloudCLI provides the environment, not the AI. You bring your own Claude, Cursor, or Codex subscription. CloudCLI Cloud starts at €7/month for the hosted environment on top of that.
-
-</details>
-
-<details>
-<summary>Can I use CloudCLI UI on my phone?</summary>
-
-Yes. For self-hosted, run the server on your machine and open `[yourip]:port` in any browser on your network. For CloudCLI Cloud, open it from any device — no VPN, no port forwarding, no setup. A native app is also in the works.
-
-</details>
-
-<details>
-<summary>Will changes I make in the UI affect my local Claude Code setup?</summary>
-
-Yes, for self-hosted. CloudCLI UI reads from and writes to the same `~/.claude` config that Claude Code uses natively. MCP servers you add via the UI show up in Claude Code immediately and vice versa.
-
-</details>
-
----
-
-## Community & Support
-
-- **[Documentation](https://cloudcli.ai/docs)** — installation, configuration, features, and troubleshooting
-- **[Discord](https://discord.gg/buxwujPNRE)** — get help and connect with other users
-- **[GitHub Issues](https://github.com/siteboon/claudecodeui/issues)** — bug reports and feature requests
-- **[Contributing Guide](CONTRIBUTING.md)** — how to contribute to the project
-
-## License
-
-GNU Affero General Public License v3.0 or later (AGPL-3.0-or-later) — see [LICENSE](LICENSE) for the full text, including additional terms under Section 7.
-
-This project is open source and free to use, modify, and distribute under the AGPL-3.0-or-later license. If you modify this software and run it as a network service, you must make your modified source code available to users of that service.
-
-CloudCLI UI - (https://cloudcli.ai).
-
-## Acknowledgments
-
-### Built With
-- **[Claude Code](https://docs.anthropic.com/en/docs/claude-code)** - Anthropic's official CLI
-- **[Cursor CLI](https://docs.cursor.com/en/cli/overview)** - Cursor's official CLI
-- **[Codex](https://developers.openai.com/codex)** - OpenAI Codex
-- **[React](https://react.dev/)** - User interface library
-- **[Vite](https://vitejs.dev/)** - Fast build tool and dev server
-- **[Tailwind CSS](https://tailwindcss.com/)** - Utility-first CSS framework
-- **[CodeMirror](https://codemirror.net/)** - Advanced code editor
-- **[TaskMaster AI](https://github.com/eyaltoledano/claude-task-master)** *(Optional)* - AI-powered project management and task planning
-
-
-### Sponsors
-- [Siteboon - AI powered website builder](https://siteboon.ai)
----
-
-<div align="center">
- <strong>Made with care for the Claude Code, Cursor and Codex community.</strong>
-</div>
+License: AGPL-3.0-or-later. Built on CloudCLI UI (siteboon/claudecodeui); see [NOTICE](NOTICE).
