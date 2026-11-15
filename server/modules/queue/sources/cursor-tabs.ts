@@ -23,7 +23,8 @@ export async function refreshCursorTabs(): Promise<void> {
   const base = path.join(cursorUserDir(), 'workspaceStorage');
   const week = Date.now() - 7 * 24 * 3600 * 1000;
   const found: Array<{ at: number; sids: string[] }> = [];
-  for (const dir of await fs.readdir(base)) {
+  // No folder: Cursor is not installed (or never ran) here, so it has no tabs.
+  for (const dir of await fs.readdir(base).catch(() => [] as string[])) {
     const file = path.join(base, dir, 'state.vscdb');
     const stat = await fs.stat(file).catch(() => null);
     if (!stat || stat.mtimeMs < week) continue;
