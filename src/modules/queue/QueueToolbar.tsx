@@ -79,7 +79,7 @@ export default function QueueToolbar({ onNewSession }: { onNewSession: () => voi
         <SlidersHorizontal className="h-3.5 w-3.5 flex-shrink-0" />
         Personalize
       </button>
-      <QuestsOffNotice />
+      <QuestsOffNotice onChoose={() => setPersonalizing(true)} />
       {personalizing && <PersonalizeDialog onClose={() => setPersonalizing(false)} />}
     </div>
   );
