@@ -18,6 +18,7 @@ import {
 } from '@/modules/providers/index.js';
 import { connectedClients, createWebSocketServer } from '@/modules/websocket/index.js';
 import { handleBrowserChat, onChatsChanged, reviveRoutes, startManager } from '@/modules/chat-hosts/index.js';
+import { personalizeRoutes } from './modules/personalize/index.js';
 import { allMarks, approvalsOf, runningRuns, setOnProcessChange, startRuntimeStatePoll } from '@/shared/runtime-state.js';
 
 import { getConnectableHost } from '../shared/networkHosts.js';
@@ -211,6 +212,8 @@ app.use('/api/quests/about', authenticateToken, aboutRoutes);
 app.use('/api/quests/events', authenticateToken, eventRoutes);
 // quests: "Revive from crash", one message to every chat that should be alive but is not.
 app.use('/api/quests/revive', authenticateToken, reviveRoutes);
+// quests: the Personalize form: a repo's quests.json and the user's settings.
+app.use('/api/quests/personalize', authenticateToken, personalizeRoutes);
 
 // Agent API Routes (uses API key authentication)
 app.use('/api/agent', agentRoutes);

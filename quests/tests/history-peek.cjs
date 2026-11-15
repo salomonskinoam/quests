@@ -1,18 +1,12 @@
 // quests: prints the last N normalized messages of a chat as the page receives them (type, role, head of content).
 //   node quests/tests/history-peek.cjs <sessionId> [n]
-const os = require('node:os');
-const path = require('node:path');
-const jwt = require('jsonwebtoken');
-const Database = require('better-sqlite3');
 
 const [sessionId, nArg] = process.argv.slice(2);
 const n = Number(nArg || 40);
-const secret = new Database(path.join(os.homedir(), '.cloudcli', 'auth.db'), { readonly: true })
-  .prepare("select value from app_config where key like '%jwt%'").get().value;
-const token = jwt.sign({ userId: 1, username: os.userInfo().username }, secret, { expiresIn: 600 });
+const { base, token, databasePath, chrome } = require('./env.cjs');
 
 (async () => {
-  const response = await fetch(`http://127.0.0.1:3001/api/providers/sessions/${encodeURIComponent(sessionId)}/messages?limit=${n}`, {
+  const response = await fetch(`${base}/api/providers/sessions/${encodeURIComponent(sessionId)}/messages?limit=${n}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   const json = await response.json();

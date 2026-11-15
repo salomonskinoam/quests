@@ -17,6 +17,7 @@ let timer: NodeJS.Timeout | null = null;
 let chain: Promise<void> = Promise.resolve();
 
 async function write(read: () => MirrorState): Promise<void> {
+  if (!ticketsRepo()) return; // no tickets repo: the order lives in the local database only
   const body = JSON.stringify({ ...read(), updatedAt: new Date().toISOString() }, null, 1);
   const branch = await gh(['api', `repos/${ticketsRepo()}/git/ref/heads/${BRANCH}`]).catch(() => null);
   if (!branch) {
@@ -40,6 +41,7 @@ export function scheduleMirror(read: () => MirrorState): void {
 
 /** The saved state, or null when no mirror exists yet. */
 export async function readMirror(): Promise<MirrorState | null> {
+  if (!ticketsRepo()) return null;
   const content = await gh(['api', `repos/${ticketsRepo()}/contents/${PATH}?ref=${BRANCH}`, '--jq', '.content']).catch(() => null);
   if (!content) return null;
   const saved = JSON.parse(Buffer.from(content, 'base64').toString('utf8'));

@@ -16,7 +16,7 @@ and the repo.
 
 ## The user side: `~/.config/quests/user.env`
 
-Plain `KEY=value` lines. Every one is required. There is no built-in default.
+Plain `KEY=value` lines. Every one is optional and has a default (`quests/README.md`, "Settings"); the Personalize form of the page writes the first three.
 
 | Key | Meaning | Example |
 |---|---|---|
@@ -50,7 +50,7 @@ Any number of servers run side by side. Each one is the user unit `quests-ui@<in
 | `SERVER_PORT` | the page's port | `3002` |
 | `DATABASE_PATH` | the server's database | `~/.config/quests/demo.db` |
 | `QUESTS_UNIT_PREFIX` | names the chat and listener units (`<prefix>-chat-<id>`, `<prefix>-listen-<id>`), the socket folder `$XDG_RUNTIME_DIR/<prefix>` and the builds folder `~/.local/share/<prefix>/builds` | `quests-demo` |
-| `PROJECT_ROOTS` | the repos this server serves, `:`-separated. Empty means every repo that no other server lists | `/home/ann/src/demo` |
+| `PROJECT_ROOTS` | the repos this server serves, `:`-separated (`;` on Windows). Empty means every repo that no other server lists | `/home/ann/src/demo` |
 | `TICKETS_REPO` | optional: this server's own tickets repo | `ann/demo-tickets` |
 
 A UI connects to one server by its URL, `http://localhost:<SERVER_PORT>`. A build in a checkout
@@ -76,7 +76,7 @@ Code, `<repo>/.claude/worktrees/<name>`, belongs to its repo.
 | `finish_command` | the command that is the last of those steps. Another plugin can hook a step in right before it, through its start text |
 | `drawer_question` | the first question the Summary drawer offers about a chat |
 
-The file is the opt-in. A repo without it gets no quests hook, even with the plugin on. A worktree
+The file is the opt-in, and every key in it is optional: `{}` is enough. The Personalize form of the page writes it. A repo without it gets no quests hook, even with the plugin on. A worktree
 needs its own copy, or a link to the repo's.
 
 ## Installing the plugin, once per user

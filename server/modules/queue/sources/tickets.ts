@@ -44,6 +44,7 @@ type IssueNode = {
 };
 
 export async function refreshTickets(): Promise<void> {
+  if (!ticketsRepo()) { tickets = []; return; } // no tickets repo: the queue holds chats only
   const nodes: IssueNode[] = [];
   let cursor: string | null = null;
   do {

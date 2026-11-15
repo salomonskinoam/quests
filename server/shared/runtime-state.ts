@@ -15,7 +15,11 @@ import type { BackgroundTaskSummary, LLMProvider } from '@/shared/types.js';
 /** quests: each chat service (server/runner.ts with QUESTS_CHAT set) listens on its own socket in this folder. */
 /** One folder per server (quests-instance.ts unitPrefix), so a server reads only its own chats' sockets. */
 export const chatsDir = (): string => path.join(process.env.XDG_RUNTIME_DIR ?? os.tmpdir(), unitPrefix());
-export const chatSocket = (sessionId: string): string => path.join(chatsDir(), `chat-${sessionId}.sock`);
+/** Windows has no socket files: a chat service listens on the named pipe \\.\pipe\<prefix>-chat-<id> instead. */
+const PIPES = String.raw`\\.\pipe\ `.trim();
+export const chatSocket = (sessionId: string): string => (process.platform === 'win32'
+  ? `${PIPES}${unitPrefix()}-chat-${sessionId}`
+  : path.join(chatsDir(), `chat-${sessionId}.sock`));
 export const chatUnit = (sessionId: string): string => `${unitPrefix()}-chat-${sessionId}`;
 
 export type RuntimeRun = {
@@ -65,6 +69,10 @@ export const isUnanswering = (sessionId: string): boolean => timedOut.has(sessio
 /** The page session ids of the chat services with a socket file (a crashed one leaves its file behind). */
 export const chatSocketIds = (): string[] => {
   try {
+    if (process.platform === 'win32') {
+      const head = `${unitPrefix()}-chat-`;
+      return fs.readdirSync(PIPES).filter((f) => f.startsWith(head)).map((f) => f.slice(head.length));
+    }
     return fs.readdirSync(chatsDir()).filter((f) => f.startsWith('chat-') && f.endsWith('.sock')).map((f) => f.slice(5, -5));
   } catch {
     return [];

@@ -1,40 +1,60 @@
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
 import { WebSocket } from 'ws';
 
 import { generateToken } from '@/modules/auth/index.js';
 import { userDb } from '@/modules/database/index.js';
 import { connectedClients } from '@/modules/websocket/index.js';
+import { unitPrefix } from '@/shared/quests-instance.js';
 import { chatSocket, chatUnit, refreshRuntimeState } from '@/shared/runtime-state.js';
 import { findApplicationRoot, getModuleDirectory } from '@/shared/utils.js';
 
+import { startUnit, unitActive } from './units.js';
+
 /**
  * quests: the manager's side of the chat services. Each chat runs in its own user unit, quests-chat-<page session
- * id> (server/runner.ts with QUESTS_CHAT), started here with systemd-run from scripts/start-chat.sh. systemd refuses
- * a second unit of the same name, so a chat never has two processes. The page server holds no work: it starts
+ * id> (server/runner.ts with QUESTS_CHAT), started here through units.ts: systemd-run of scripts/start-chat.sh on
+ * Linux, a detached node process elsewhere. A chat never has two processes. The page server holds no work: it starts
  * services, passes frames to them, and reads their state.
  */
 
-const run = promisify(execFile);
 const START_SCRIPT = path.join(findApplicationRoot(getModuleDirectory(import.meta.url)), 'scripts', 'start-chat.sh');
 
 /** True when something listens on the socket (a crashed service leaves its file behind). */
 export function socketAnswers(socket: string): Promise<boolean> {
   return new Promise((resolve) => {
-    if (!fs.existsSync(socket)) return resolve(false);
     const c = net.connect(socket);
     c.once('connect', () => { c.destroy(); resolve(true); });
     c.once('error', () => resolve(false));
   });
 }
 
-export async function unitActive(sessionId: string): Promise<boolean> {
-  const { stdout } = await run('systemctl', ['--user', 'is-active', `${chatUnit(sessionId)}.service`]).catch((e: { stdout?: string }) => ({ stdout: e.stdout ?? '' }));
-  return ['active', 'activating', 'deactivating'].includes(stdout.trim());
+/**
+ * The newest snapshot build (scripts/snapshot-build.mjs names them <time>-<commit>, so the last by name), for the
+ * detached chat process; on Linux start-chat.sh follows builds/current instead.
+ */
+function newestBuild(): string {
+  const builds = path.join(os.homedir(), '.local', 'share', unitPrefix(), 'builds');
+  const id = fs.readdirSync(builds).filter((f) => !f.startsWith('current')).sort().at(-1);
+  if (!id) throw new Error(`no snapshot build in ${builds}: run npm run build`);
+  return path.join(builds, id);
+}
+
+function startChat(sessionId: string): Promise<void> {
+  const build = newestBuild();
+  return startUnit({
+    unit: chatUnit(sessionId),
+    description: `quests chat ${sessionId}`,
+    systemd: [START_SCRIPT, sessionId],
+    detached: {
+      command: [process.execPath, path.join(build, 'dist-server', 'server', 'runner.js')],
+      cwd: build,
+      env: { QUESTS_CHAT: sessionId, QUESTS_BUILD: path.basename(build), CLAUDE_TOOL_APPROVAL_TIMEOUT_MS: '86400000' },
+    },
+  });
 }
 
 const starting = new Map<string, Promise<void>>();
@@ -48,9 +68,7 @@ export function ensureHost(sessionId: string): Promise<void> {
   if (pending) return pending;
   const p = (async () => {
     if (await socketAnswers(chatSocket(sessionId))) return;
-    if (!(await unitActive(sessionId))) {
-      await run('systemd-run', ['--user', '--collect', '--unit', chatUnit(sessionId), `--description=quests chat ${sessionId}`, `--setenv=QUESTS_INSTANCE=${process.env.QUESTS_INSTANCE}`, START_SCRIPT, sessionId]);
-    }
+    if (!(await unitActive(chatUnit(sessionId)))) await startChat(sessionId);
     for (let i = 0; i < 300; i += 1) {
       if (await socketAnswers(chatSocket(sessionId))) {
         void refreshRuntimeState();

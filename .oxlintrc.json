@@ -72,7 +72,9 @@
           "server/shared/claude-cli-path.ts",
           "server/shared/image-attachments.ts",
           "server/shared/message-unification.ts",
-          "server/shared/runtime-state.ts"
+          "server/shared/runtime-state.ts",
+          "server/shared/quests-instance.ts",
+          "server/shared/quests-repo.ts"
         ],
         "mode": "file"
       },

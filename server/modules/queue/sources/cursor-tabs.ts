@@ -12,8 +12,15 @@ import Database from 'better-sqlite3';
 let cursorTabs: string[] = [];
 export const getCursorTabs = () => cursorTabs;
 
+/** Where Cursor (like VS Code) keeps its user data on each platform. */
+function cursorUserDir(): string {
+  if (process.platform === 'win32') return path.join(process.env.APPDATA ?? path.join(os.homedir(), 'AppData', 'Roaming'), 'Cursor', 'User');
+  if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support', 'Cursor', 'User');
+  return path.join(os.homedir(), '.config', 'Cursor', 'User');
+}
+
 export async function refreshCursorTabs(): Promise<void> {
-  const base = path.join(os.homedir(), '.config', 'Cursor', 'User', 'workspaceStorage');
+  const base = path.join(cursorUserDir(), 'workspaceStorage');
   const week = Date.now() - 7 * 24 * 3600 * 1000;
   const found: Array<{ at: number; sids: string[] }> = [];
   for (const dir of await fs.readdir(base)) {

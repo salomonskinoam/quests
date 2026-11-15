@@ -7,9 +7,10 @@ import { repoOf } from '@/shared/quests-instance.js';
 /**
  * quests: the repo side of the interface, <repo>/quests.json (quests/INTERFACE.md). "areas" is a command that prints
  * the repo's areas, one per line (the second word of a chat name, a ticket's area label); "drawer_question" is the
- * Summary drawer's first question. A repo without quests.json has not turned quests on: it has no manifest.
+ * Summary drawer's first question. A repo without quests.json has not turned quests on: it has no manifest. Every
+ * key is optional: `{}` turns quests on with one area, "general".
  */
-export type QuestsManifest = { areas: string; finish: string; finish_command: string; drawer_question: string };
+export type QuestsManifest = { areas?: string; finish?: string; finish_command?: string; drawer_question?: string };
 
 export function manifestOf(projectPath: string): QuestsManifest | null {
   const file = path.join(repoOf(projectPath), 'quests.json');
@@ -25,7 +26,9 @@ export function areasOf(projectPath: string): string[] {
   const hit = areasCache.get(repo);
   if (hit && Date.now() - hit.at < AREAS_TTL_MS) return hit.areas;
   const m = manifestOf(repo);
-  const areas = m ? execSync(m.areas, { cwd: repo, encoding: 'utf8', timeout: 10_000 }).split('\n').map((l) => l.trim()).filter(Boolean) : [];
+  // bash on every platform (Git Bash on Windows), like the hooks, so one areas command works everywhere.
+  const areas = !m ? [] : !m.areas ? ['general']
+    : execSync(m.areas, { cwd: repo, encoding: 'utf8', timeout: 10_000, shell: 'bash' }).split('\n').map((l) => l.trim()).filter(Boolean);
   areasCache.set(repo, { at: Date.now(), areas });
   return areas;
 }

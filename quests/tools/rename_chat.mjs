@@ -9,6 +9,7 @@ import { execSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { query, renameSession } from '../../node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs';
 
@@ -16,9 +17,11 @@ export const NAME_FORMAT = /^[a-z]{3}_\d\d \S+ \S+ \S+( #\d+)?$/;
 
 /** The repo's areas, from its quests.json "areas" command, run at the repo root. */
 export function areasOf(repo = process.env.CLAUDE_PROJECT_DIR ?? process.cwd()) {
-  const root = repo.replace(/\/\.claude\/worktrees\/[^/]+$/, '');
+  const root = repo.replace(/[\\/]\.claude[\\/]worktrees[\\/][^\\/]+$/, '');
   const { areas } = JSON.parse(readFileSync(path.join(root, 'quests.json'), 'utf8'));
-  return execSync(areas, { cwd: root, encoding: 'utf8' }).split('\n').map((l) => l.trim()).filter(Boolean);
+  // bash on every platform (Git Bash on Windows), like queue_start.sh, so one areas command works everywhere.
+  if (!areas) return ['general']; // no "areas" in quests.json: the one area
+  return execSync(areas, { cwd: root, encoding: 'utf8', shell: 'bash' }).split('\n').map((l) => l.trim()).filter(Boolean);
 }
 
 export function today() {
@@ -51,7 +54,8 @@ export async function renameChat(sessionId, name, areas = areasOf()) {
   return name;
 }
 
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+// Run directly (not imported). Case-blind: Windows may spell the drive c: or C:.
+if (process.argv[1] && import.meta.url.toLowerCase() === pathToFileURL(process.argv[1]).href.toLowerCase()) {
   const [sessionId, ...rest] = process.argv.slice(2);
   const flag = (f) => { const i = rest.indexOf(f); return i >= 0 ? rest[i + 1] : undefined; };
   const name = rest[0] === '--haiku' ? await haikuName(flag('--haiku'), flag('--ticket')) : rest[0];

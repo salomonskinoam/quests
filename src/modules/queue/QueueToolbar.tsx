@@ -1,9 +1,12 @@
-import { HeartPulse, Palette, Plus, RefreshCw } from 'lucide-react';
+import { useState } from 'react';
+import { HeartPulse, Palette, Plus, RefreshCw, SlidersHorizontal } from 'lucide-react';
 
 import { authenticatedFetch } from '@/shared/api';
 
 import { reassignColors } from '@/modules/queue/familyColors';
+import PersonalizeDialog from '@/modules/queue/PersonalizeDialog';
 import { syncTabsFromCursor } from '@/modules/queue/queueNavigation';
+import QuestsOffNotice from '@/modules/queue/QuestsOffNotice';
 
 const BUTTON = 'mx-2 flex h-[26px] items-center gap-2 whitespace-nowrap rounded-sm px-2 text-[13px] text-[#cccccc] hover:bg-[#2a2d2e]';
 
@@ -27,8 +30,9 @@ async function reviveFromCrash(): Promise<void> {
   if (!sent.ok) throw new Error(`revive: ${sent.status} ${await sent.text()}`);
 }
 
-/** quests priority queue: the buttons above the list, each on its own line: new chat, sync from Cursor, Recolor, Revive. */
+/** quests priority queue: the buttons above the list, each on its own line: new chat, sync from Cursor, Recolor, Revive, Personalize. */
 export default function QueueToolbar({ onNewSession }: { onNewSession: () => void }) {
+  const [personalizing, setPersonalizing] = useState(false);
   return (
     <div className="mb-1 flex flex-col">
       <button type="button" data-quests-queue="new-session" title="A new empty chat" className={BUTTON} onClick={onNewSession}>
@@ -65,6 +69,18 @@ export default function QueueToolbar({ onNewSession }: { onNewSession: () => voi
         <HeartPulse className="h-3.5 w-3.5 flex-shrink-0" />
         Revive from crash
       </button>
+      <button
+        type="button"
+        data-quests-queue="personalize"
+        title="Your name, time zone and tickets repo, and how each repo uses quests"
+        className={BUTTON}
+        onClick={() => setPersonalizing(true)}
+      >
+        <SlidersHorizontal className="h-3.5 w-3.5 flex-shrink-0" />
+        Personalize
+      </button>
+      <QuestsOffNotice />
+      {personalizing && <PersonalizeDialog onClose={() => setPersonalizing(false)} />}
     </div>
   );
 }

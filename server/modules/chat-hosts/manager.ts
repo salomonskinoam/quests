@@ -1,7 +1,5 @@
-import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { promisify } from 'node:util';
 
 import { chatHostsDb, listenersDb, scheduledMessagesDb, sessionDraftsDb, sessionsDb } from '@/modules/database/index.js';
 import type { ListenerRow } from '@/modules/database/index.js';
@@ -13,6 +11,7 @@ import { findApplicationRoot, getModuleDirectory } from '@/shared/utils.js';
 
 import { controlConnection, ensureHost, onHostStarted, sendToChat } from './hosts.js';
 import { decide, type Action, type ChatFacts, type Facts } from './reconcile.js';
+import { activeUnits, startUnit } from './units.js';
 
 /**
  * quests: runs the check (reconcile.ts) and does what it says. Started with the page server: once at start (after a
@@ -20,14 +19,8 @@ import { decide, type Action, type ChatFacts, type Facts } from './reconcile.js'
  * control connection per live chat service, so a change of state reaches the queue and the dots at once.
  */
 
-const run = promisify(execFile);
 const LISTEN_RUN = path.join(findApplicationRoot(getModuleDirectory(import.meta.url)), 'quests', 'bin', 'quests-listen-run');
 const CHECK_MS = 30_000;
-
-async function activeUnits(prefix: string): Promise<Set<string>> {
-  const { stdout } = await run('systemctl', ['--user', 'list-units', `${prefix}*`, '--state=active,activating', '--plain', '--no-legend']);
-  return new Set(stdout.split('\n').map((l) => l.trim().split(/\s+/)[0]).filter(Boolean).map((u) => u.slice(prefix.length, -'.service'.length)));
-}
 
 function tail(file: string, lines = 20): string {
   try {
@@ -110,7 +103,12 @@ async function apply(a: Action, listeners: ListenerRow[]): Promise<void> {
       const l = listeners.find((x) => x.id === a.listenerId);
       console.log(`[manager] listener ${a.listenerId} (${l?.name}) died without an exit; starting it again`);
       listenersDb.markRestarted(a.listenerId);
-      await run('systemd-run', ['--user', '--collect', '--unit', `${unitPrefix()}-listen-${a.listenerId}`, `--description=quests listener ${l?.name ?? a.listenerId}`, `--setenv=QUESTS_INSTANCE=${process.env.QUESTS_INSTANCE}`, LISTEN_RUN, a.listenerId]);
+      await startUnit({
+        unit: `${unitPrefix()}-listen-${a.listenerId}`,
+        description: `quests listener ${l?.name ?? a.listenerId}`,
+        systemd: [LISTEN_RUN, a.listenerId],
+        detached: { command: ['python3', LISTEN_RUN, a.listenerId], cwd: process.cwd(), env: {} },
+      });
       return;
     }
     case 'start':

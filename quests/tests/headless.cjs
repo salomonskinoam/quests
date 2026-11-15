@@ -1,4 +1,4 @@
-// quests: headless checks of the running page (http://127.0.0.1:3001), in Chrome via playwright-core.
+// quests: headless checks of the running page (${base}), in Chrome via playwright-core.
 // Read-only: opens one chat, never types in it. Logs in with a 10-minute token signed by the app's own secret.
 //
 //   node quests/tests/headless.cjs <check> <sessionId>
@@ -34,7 +34,6 @@
 const os = require('node:os');
 const path = require('node:path');
 const { chromium } = require('playwright-core');
-const jwt = require('jsonwebtoken');
 const Database = require('better-sqlite3');
 
 const [check, sessionId] = process.argv.slice(2);
@@ -42,19 +41,17 @@ if (!['live', 'pin', 'bottom', 'scroll', 'tabs', 'mode', 'plan', 'queue', 'drag'
   console.error('usage: node quests/tests/headless.cjs live|pin|bottom|scroll|tabs|mode|plan|queue|drag|next|latch|readonly|forest|ticketchat|tabhover|newtab|synccursor|dropline|split|colors|groups <sessionId>');
   process.exit(2);
 }
-const secret = new Database(path.join(os.homedir(), '.cloudcli', 'auth.db'), { readonly: true })
-  .prepare("select value from app_config where key like '%jwt%'").get().value;
-const token = jwt.sign({ userId: 1, username: os.userInfo().username }, secret, { expiresIn: 600 });
+const { base, token, databasePath, chrome } = require('./env.cjs');
 
 (async () => {
-  const browser = await chromium.launch({ executablePath: process.env.CHROME || '/opt/google/chrome/chrome', headless: true, args: ['--disable-smooth-scrolling'] });
+  const browser = await chromium.launch({ executablePath: chrome, headless: true, args: ['--disable-smooth-scrolling'] });
   const page = await browser.newPage({ viewport: { width: 1400, height: 900 } });
   await page.addInitScript((t) => localStorage.setItem('auth-token', t), token);
   // The list's default (focus) shows only the chats that wait for the user; every check but `focus` reads the
   // whole list, so they open the page in archive mode.
   await page.addInitScript((mode) => localStorage.setItem('quests-queue-mode', mode), ['focus', 'hold', 'archived', 'dragunclaimed', 'ticketgroups', 'ticketchat', 'switch', 'search', 'place'].includes(check) ? 'focus' : 'archive');
   page.on('pageerror', (error) => console.log('page error:', (error.stack || error.message).slice(0, 700)));
-  await page.goto(check === 'plan' ? 'http://127.0.0.1:3001/' : `http://127.0.0.1:3001/session/${sessionId}`);
+  await page.goto(check === 'plan' ? `${base}/` : `${base}/session/${sessionId}`);
   await page.waitForTimeout(6000);
   const pane = page.locator('[data-chat-view="shown"] .chat-messages-pane');
 
@@ -160,7 +157,7 @@ const token = jwt.sign({ userId: 1, username: os.userInfo().username }, secret, 
       panes.left.splice(at + 1, 0, `plan:${p}`);
       localStorage.setItem('quests-panes', JSON.stringify(panes));
     }, [chats[0], chats[1], plan]);
-    await page.goto(`http://127.0.0.1:3001/plan/${plan}`);
+    await page.goto(`${base}/plan/${plan}`);
     await page.waitForTimeout(5000);
     const r = await page.evaluate(() => ({
       tabs: Array.from(document.querySelectorAll('[data-quests-tabs="row"] > [draggable="true"]')).map((t) => t.textContent.replace('×', '').trim().slice(0, 30)),
@@ -174,7 +171,7 @@ const token = jwt.sign({ userId: 1, username: os.userInfo().username }, secret, 
   if (check === 'planedit') {
     // <sessionId> is a plan name. The plan tab's Edit shows the file's text in a text box; Cancel goes back to the
     // rendered plan. Nothing is saved (Save writes the file).
-    await page.goto(`http://127.0.0.1:3001/plan/${sessionId}`);
+    await page.goto(`${base}/plan/${sessionId}`);
     await page.waitForTimeout(5000);
     const file = await page.evaluate(async (n) => (await (await fetch(`/api/quests/plan/${n}`, { headers: { Authorization: `Bearer ${localStorage.getItem('auth-token')}` } })).json()).text, sessionId);
     await page.locator('[data-quests-plan="tab-edit"]').click();
@@ -424,7 +421,7 @@ const token = jwt.sign({ userId: 1, username: os.userInfo().username }, secret, 
     // Reading older messages while the transcript changes on disk: the reading position must not move. The pane
     // is scrolled to the middle, a row in view is marked, the transcript's mtime is touched (the watcher reloads
     // the chat), and the marked row's place is measured again 4 s later.
-    const jsonl = new Database(path.join(os.homedir(), '.cloudcli', 'auth.db'), { readonly: true })
+    const jsonl = new Database(databasePath, { readonly: true })
       .prepare('select jsonl_path from sessions where session_id = ?').get(sessionId)?.jsonl_path;
     await page.locator('[data-chat-view="shown"] .chat-messages-pane .chat-message').first().waitFor({ timeout: 40000 }).catch(() => undefined);
     await page.waitForTimeout(2000);
@@ -873,12 +870,12 @@ const token = jwt.sign({ userId: 1, username: os.userInfo().username }, secret, 
     page.on('request', (r) => { if (/\/api\/providers\/sessions\/[^/]+\/messages/.test(r.url())) reads.push(r.url()); });
     // Every request during a click, with its start and end time after the click (ms).
     const timeline = []; let clickAt = 0;
-    page.on('requestfinished', (r) => { if (clickAt) { const t = r.timing(); timeline.push({ url: r.url().replace('http://127.0.0.1:3001', '').slice(0, 90), start: Math.round(t.startTime - clickAt), end: Math.round(t.startTime + t.responseEnd - clickAt) }); } });
-    await page.goto(`http://127.0.0.1:3001/session/${other.sessionId}`);
+    page.on('requestfinished', (r) => { if (clickAt) { const t = r.timing(); timeline.push({ url: r.url().replace(base, '').slice(0, 90), start: Math.round(t.startTime - clickAt), end: Math.round(t.startTime + t.responseEnd - clickAt) }); } });
+    await page.goto(`${base}/session/${other.sessionId}`);
     await page.waitForTimeout(6000);
     const dialog = await page.evaluate(() => { const n = document.querySelector('.fixed.inset-0.z-50'); return n ? n.outerHTML.replace(/\s+/g, ' ').slice(0, 900) : ''; });
     console.log(JSON.stringify({ dialog }));
-    await page.screenshot({ path: process.env.SHOT || '/tmp/claude-1000/switch.png' });
+    await page.screenshot({ path: process.env.SHOT || path.join(os.tmpdir(), 'switch.png') });
     if (dialog) { await page.keyboard.press('Escape'); await page.waitForTimeout(500); }
     const tabs = page.locator('[data-quests-tabs="row"] div[draggable="true"][title]');
     const names = await tabs.evaluateAll((ns) => ns.map((n) => n.getAttribute('title')));
@@ -1026,7 +1023,7 @@ const token = jwt.sign({ userId: 1, username: os.userInfo().username }, secret, 
     // "@" in the input box lists the project's files, as in Cursor (requirement 92): type "@" plus QUERY (default
     // "read"), wait, read the dropdown, then empty the box again (nothing is sent). Also the file-list request.
     const lists = [];
-    page.on('requestfinished', async (r) => { if (r.url().includes('/api/file-tree/')) { const t = r.timing(); lists.push({ url: r.url().replace('http://127.0.0.1:3001', '').slice(0, 120), ms: Math.round(t.responseEnd), status: (await r.response())?.status(), bytes: (await r.response().then((x) => x.body()).catch(() => Buffer.alloc(0))).length }); } });
+    page.on('requestfinished', async (r) => { if (r.url().includes('/api/file-tree/')) { const t = r.timing(); lists.push({ url: r.url().replace(base, '').slice(0, 120), ms: Math.round(t.responseEnd), status: (await r.response())?.status(), bytes: (await r.response().then((x) => x.body()).catch(() => Buffer.alloc(0))).length }); } });
     const box = page.locator('[data-chat-view="shown"] [data-slot="prompt-input-textarea"]').first();
     await box.waitFor({ timeout: 40000 });
     await page.waitForTimeout(3000);
@@ -1044,8 +1041,8 @@ const token = jwt.sign({ userId: 1, username: os.userInfo().username }, secret, 
     // frame after it). views: each chat view, shown or kept, with its row count.
     const q = await apiQueue();
     const other = q.entries.find((e) => e.sessionId && e.sessionId !== sessionId && !e.heldOutside && e.placement !== 'archive');
-    await page.goto(`http://127.0.0.1:3001/session/${other.sessionId}`); await page.waitForTimeout(4000);
-    await page.goto(`http://127.0.0.1:3001/session/${sessionId}`); await page.waitForTimeout(2000);
+    await page.goto(`${base}/session/${other.sessionId}`); await page.waitForTimeout(4000);
+    await page.goto(`${base}/session/${sessionId}`); await page.waitForTimeout(2000);
     await page.reload(); await page.waitForTimeout(8000);
     const views = () => page.evaluate(() => [...document.querySelectorAll('[data-chat-view]')].map((v) => `${v.dataset.chatView}:${v.querySelectorAll('[data-row-id]').length}`));
     const before = await views();
@@ -1218,7 +1215,7 @@ const token = jwt.sign({ userId: 1, username: os.userInfo().username }, secret, 
     // A tab dropped on the right half of the chat opens in the right pane; dropped on the left half, it is shown on
     // the left and the chat that was there moves to the right pane. Uses this headless browser's own tabs only.
     const other = (await apiQueue()).entries.find((e) => e.sessionId && e.sessionId !== sessionId).sessionId;
-    await page.goto(`http://127.0.0.1:3001/session/${other}`);
+    await page.goto(`${base}/session/${other}`);
     await page.waitForTimeout(4000);
     const panes = () => page.evaluate(() => JSON.parse(localStorage.getItem('quests-panes') || '{}'));
     const dragTabTo = async (id, xShare) => {
@@ -1292,7 +1289,7 @@ const token = jwt.sign({ userId: 1, username: os.userInfo().username }, secret, 
     await page.locator('[data-quests-tab="new"]').first().click();
     await page.waitForTimeout(2000);
     const plus = await state();
-    await page.goto(`http://127.0.0.1:3001/session/${sessionId}`);
+    await page.goto(`${base}/session/${sessionId}`);
     await page.waitForTimeout(4000);
     const row = await page.locator('[data-quests-tab="new"]').first().evaluate((b) => b.parentElement.getBoundingClientRect().toJSON());
     await page.mouse.dblclick(row.right - 30, row.top + row.height / 2);

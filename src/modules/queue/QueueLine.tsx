@@ -81,7 +81,9 @@ export default function QueueLine({ entry: e, look, blinking, latched, separator
       <EntryTitle entry={e} className="min-w-0 flex-1 truncate" />
       {/* Six fixed columns on the right, the same on every line: rename (the pencil), the pin, send to the end,
           on hold (the pause), archive, the Cursor link, the ticket's close button. A column stays empty when the line has
-          nothing for it, so the icons never shift sideways. */}
+          nothing for it, so the icons never shift sideways. They show while the line is hovered: at the default
+          sidebar width they would leave the name no room. */}
+      <span className="hidden flex-shrink-0 items-center gap-1 group-hover:flex">
       <span className={SLOT}>
         {e.sessionId && onRename && (
           <button type="button" title="Rename" className={BUTTON}
@@ -141,6 +143,7 @@ export default function QueueLine({ entry: e, look, blinking, latched, separator
             <CircleCheck className="h-4 w-4" />
           </button>
         )}
+      </span>
       </span>
     </div>
   );

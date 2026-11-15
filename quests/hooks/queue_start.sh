@@ -6,12 +6,13 @@
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 ROOT="$(dirname "$HERE")"
 in="$(cat)"
-sid="$(jq -r '.session_id // empty' <<<"$in")"
-src="$(jq -r '.source // empty' <<<"$in")"
+sid="$(python3 -I "$HERE/jget.py" session_id <<<"$in")"
+src="$(python3 -I "$HERE/jget.py" source <<<"$in")"
 [ -n "$sid" ] || exit 0
 eval "$(python3 -I "$HERE/../lib/quests_env.py" --shell)" || exit 2
 manifest="$CLAUDE_PROJECT_DIR/quests.json"
-areas="$(cd "$CLAUDE_PROJECT_DIR" && bash -c "$(jq -r '.areas' "$manifest")" | paste -sd' ' -)"
+areas_cmd="$(python3 -I "$HERE/jget.py" areas <"$manifest")"  # no "areas" in quests.json: the one area "general"
+areas="$(cd "$CLAUDE_PROJECT_DIR" && bash -c "${areas_cmd:-echo general}" | paste -sd' ' -)"
 # shellcheck source=rules.sh
 . "$HERE/rules.sh"
 queue_rule
@@ -28,7 +29,9 @@ EOF
 python3 - "$sid" <<'PY' 2>/dev/null
 import json, os, re, subprocess, sys
 sid = sys.argv[1]
-R = os.environ["TICKETS_REPO"]
+R = os.environ.get("TICKETS_REPO")
+if not R:  # no tickets repo: no family
+    sys.exit(0)
 USER = os.environ["QUESTS_USER"]
 CLAIM = re.compile(r"Claimed by chat (.+?), session ([0-9a-f-]{36})")
 SID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
@@ -79,7 +82,7 @@ print("Family rule: tell these chats when the kind of your closing line changes,
 PY
 if [ "$src" = startup ]; then
   cat <<EOF
-Name rule: right after the repo's own start questions (or first, where there are none), ask $QUESTS_USER for this chat's name with AskUserQuestion: "Name this chat: <mon_dd> <area> <2 word objective>", where <area> is one of this repo's areas: $areas. Offer two options: your proposed name, and "Let Haiku choose". Other lets them type. Keep the format. A chat that starts from a ticket (its first message is "claim this ticket <link>") adds " #<ticket number>" at the end. Then run:
+Name rule: this is a new chat, and it always gets its name asked, also when the first message is quick or says to do no work. Right after the repo's own start questions (or first, where there are none), before anything else, ask $QUESTS_USER with AskUserQuestion: "Name this chat <mon_dd> <area> <2 word objective>?", where <area> is one of this repo's areas: $areas, and the two words say what this chat is for. Offer two options: your proposed name, and "Let Haiku choose". Other lets them type. Keep the format. A chat that starts from a ticket (its first message is "claim this ticket <link>") adds " #<ticket number>" at the end. Then run:
   node $ROOT/tools/rename_chat.mjs $sid "<name>"
 or, for Haiku:
   node $ROOT/tools/rename_chat.mjs $sid --haiku "<their first message>" [--ticket <number>]

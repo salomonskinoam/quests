@@ -6,11 +6,18 @@ import path from 'node:path';
  * quests: the work tabs' server side for backgrounded commands. Claude Code writes a backgrounded command's output
  * to /tmp/claude-<uid>/<cwd as a folder name>/<session id>/tasks/<task id>.output and names that file in the
  * tool result (`<output-file>`); a watcher (the Monitor tool) tails a log a chat keeps under /tmp/claude-<its
- * id>/. Only a file under a /tmp/claude-* folder is served, and only its tail.
+ * id>/. Only a file under a /tmp/claude-* folder is served, and only its tail. On Windows Claude Code writes to
+ * %TEMP%\claude\<folder>\<session id>\tasks instead, and only a file under %TEMP%\claude is served.
  */
 
 export const TASK_OUTPUT_FILE = /^\/tmp\/claude-[A-Za-z0-9_-]+\/(?!(?:.*\/)?\.\.(?:\/|$))[^\0]+$/;
-export const isTaskOutputFile = (file: string): boolean => TASK_OUTPUT_FILE.test(file);
+const WIN_ROOT = path.win32.join(os.tmpdir(), 'claude');
+/** Used by server/index.ts before it serves a file: true only for a file in Claude Code's task folder. */
+export const isTaskOutputFile = (file: string, platform: NodeJS.Platform = process.platform, winRoot = WIN_ROOT): boolean => {
+  if (platform !== 'win32') return TASK_OUTPUT_FILE.test(file);
+  const inRoot = file.replace(/\//g, '\\').toLowerCase().startsWith(`${winRoot.toLowerCase()}\\`);
+  return inRoot && !file.includes('\0') && !file.split(/[\\/]/).includes('..');
+};
 
 const TAIL_BYTES = 256 * 1024;
 
@@ -23,7 +30,7 @@ export type OutputTail = { text: string; size: number; modifiedAt: number; trunc
  */
 export function findTaskOutputFile(providerSessionId: string, taskId: string): string | null {
   if (!/^[0-9a-f-]{36}$/.test(providerSessionId) || !/^[A-Za-z0-9_-]+$/.test(taskId)) return null;
-  const root = path.join(os.tmpdir(), `claude-${os.userInfo().uid}`);
+  const root = process.platform === 'win32' ? WIN_ROOT : path.join(os.tmpdir(), `claude-${os.userInfo().uid}`);
   let folders: string[];
   try {
     folders = readdirSync(root);

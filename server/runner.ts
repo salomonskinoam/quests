@@ -115,9 +115,10 @@ async function start(): Promise<void> {
 
   const socket = chatSocket(CHAT);
   fs.mkdirSync(chatsDir(), { recursive: true, mode: 0o700 });
-  fs.rmSync(socket, { force: true });
+  // A named pipe (Windows) leaves no file behind and has no mode to set.
+  if (process.platform !== 'win32') fs.rmSync(socket, { force: true });
   server.listen(socket, () => {
-    fs.chmodSync(socket, 0o600);
+    if (process.platform !== 'win32') fs.chmodSync(socket, 0o600);
     console.log(`[chat ${CHAT}] listening on ${socket}`);
     chatHostsDb.register(CHAT, chatUnit(CHAT), process.env.QUESTS_BUILD ?? 'dev', process.pid);
     watchChat(CHAT, control);

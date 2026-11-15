@@ -1,5 +1,55 @@
 # quests
 
+A page that queues your Claude Code chats: which chat waits for you, which runs, which is done. Built on CloudCLI UI
+(siteboon/claudecodeui). Works on Linux, macOS and Windows.
+
+## Install
+
+Needs: Node 22+, Python 3, and Claude Code. On Windows also Git Bash (Claude Code needs it there too).
+`gh`, logged in, only if you want GitHub issues as tickets.
+
+```
+git clone https://github.com/salomonskinoam/quests.git && cd quests
+npm install
+npm run build
+bash scripts/start-local.sh          # the page: http://localhost:3001
+claude plugin marketplace add "$PWD"
+claude plugin install quests@quests --scope user
+```
+
+Open the page and create the one account of this server (it stays signed in). Nothing else is required: with no
+config file the server shows the chats of every repo on this machine.
+
+Then click **Personalize** in the page's sidebar. It sets your name, time zone and tickets repo, and turns quests on
+per repo. A repo with quests on gets: the question for each new chat's name, the reply ending the queue reads, and
+the closing steps of `/quests:finalize-chat`.
+
+## Settings
+
+Everything is optional. The Personalize form writes the rows marked "form"; the rest are files you edit.
+
+| Where | Key | What it does | Default |
+|---|---|---|---|
+| `~/.config/quests/user.env` | `QUESTS_USER` (form) | your name, as the chats address you | your login name |
+| | `QUESTS_TZ` (form) | time zone of the times shown, like `Europe/Paris` | the system's |
+| | `TICKETS_REPO` (form) | GitHub repo `owner/name` whose open issues join the queue; set it up once with `quests/bin/quests-init-tickets owner/name` | none: the queue holds chats only |
+| | `QUESTS_HOME` | the quests checkout the plugin's hooks run from | the folder given to `claude plugin marketplace add` |
+| `<repo>/quests.json` | the file itself (form) | turns quests on for that repo | off |
+| | `areas` (form) | a command printing the repo's areas, one per line; an area is the second word of a chat name | one area, `general` |
+| | `finish` (form) | a markdown file with the repo's closing steps | commit the chat's changes, no push |
+| | `finish_command` (form) | the command that is the last closing step | none |
+| | `drawer_question` (form) | the first question the Summary drawer offers | none |
+| `~/.config/quests/<instance>.env` | `SERVER_PORT` | the page's port | `3001` |
+| | `PROJECT_ROOTS` | the repos this server shows, `:`-separated (`;` on Windows) | every repo |
+| | `DATABASE_PATH` | the server's database | `~/.config/quests/<instance>.db` |
+| | `QUESTS_UNIT_PREFIX` | names its chat processes | `quests` (`quests-<instance>` for another server) |
+| | `QUESTS_CHECKOUT` | the checkout this server runs from | this one |
+
+One server is enough for any number of repos. A second server (its own port, account and repos) is one more
+`<instance>.env` and `bash scripts/start-local.sh <instance>`. The full contract: `INTERFACE.md`.
+
+## How it is built
+
 Everything of the quests setup lives in this repo (fork of siteboon/claudecodeui). Feature list, by behavior:
 `../local_features_noam.md`.
 
@@ -54,4 +104,6 @@ and the entries, never a source. On the page (`src/modules/queue/`), each piece 
 | `priority-queue/` | The priority queue's requirements (Noam's words verbatim) and plan | |
 | `examples/` | A use-case example for the chat management design (side quest) | |
 
-Setting up a new machine: clone, `npm install`, write `~/.config/quests/user.env` and one `<instance>.env` per server (`INTERFACE.md`), `npm run build`, `git remote add upstream https://github.com/siteboon/claudecodeui.git && git fetch upstream --tags`, link `system/quests-ui@.service` into `~/.config/systemd/user/`, `systemctl --user daemon-reload`, start `quests-ui@<instance>` and link it into `default.target.wants`, then install the plugin (`INTERFACE.md`).
+Linux, as a service that starts at login: clone, `npm install`, write one `<instance>.env` per server (`INTERFACE.md`), `npm run build`, `git remote add upstream https://github.com/siteboon/claudecodeui.git && git fetch upstream --tags`, link `system/quests-ui@.service` into `~/.config/systemd/user/`, `systemctl --user daemon-reload`, start `quests-ui@<instance>` and link it into `default.target.wants`, then install the plugin (`INTERFACE.md`).
+
+Windows and macOS have no systemd: the same steps without the service file. Needs `python3` on the PATH (and `gh` for tickets), and Git Bash on Windows (Claude Code's own requirement there). Start a server with `bash scripts/start-local.sh <instance>`. Chats and listeners run as detached processes, their pids in `~/.local/state/<prefix>/units` (`server/modules/chat-hosts/units.ts`); a chat listens on a named pipe on Windows. `PROJECT_ROOTS` is `;`-separated on Windows.

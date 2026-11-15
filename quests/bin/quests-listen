@@ -24,13 +24,28 @@ ENV = current()
 DB = ENV['DATABASE_PATH']
 PREFIX = ENV['QUESTS_UNIT_PREFIX']
 LOGS = os.path.expanduser('~/.local/state/quests/listeners')
+# Off Linux a listener is a detached process, its pid in the same folder the server reads
+# (server/modules/chat-hosts/units.ts).
+SYSTEMD = sys.platform.startswith('linux')
+PIDS = os.path.expanduser(f'~/.local/state/{PREFIX}/units')
 
 if len(sys.argv) == 3 and sys.argv[1] == '--stop':
     now = datetime.now(timezone.utc).isoformat()
     db = sqlite3.connect(DB, timeout=30)
     db.execute('UPDATE listeners SET ended_at = ?, exit_code = -1, delivered_at = ? WHERE id = ?', (now, now, sys.argv[2]))
     db.commit()
-    subprocess.run(['systemctl', '--user', 'stop', f'{PREFIX}-listen-{sys.argv[2]}.service'])
+    unit = f'{PREFIX}-listen-{sys.argv[2]}'
+    if SYSTEMD:
+        subprocess.run(['systemctl', '--user', 'stop', f'{unit}.service'])
+    else:
+        try:
+            pid = int(open(os.path.join(PIDS, f'{unit}.pid')).read())
+        except OSError:
+            sys.exit(0)
+        if sys.platform == 'win32':  # the whole tree: the wrapper, its bash and the command
+            subprocess.run(['taskkill', '/T', '/F', '/PID', str(pid)], capture_output=True)
+        else:
+            os.killpg(pid, 15)
     sys.exit(0)
 if len(sys.argv) < 5 or sys.argv[3] != '--':
     sys.exit(__doc__)
@@ -44,6 +59,22 @@ db = sqlite3.connect(DB, timeout=30)
 db.execute('INSERT INTO listeners (id, session_id, name, command, unit, log_path, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
            (lid, chat, name, shlex.join(command), unit, log, datetime.now(timezone.utc).isoformat()))
 db.commit()
-subprocess.run(['systemd-run', '--user', '--collect', '--quiet', '--unit', unit, f'--description=quests listener {name}',
-                f'--working-directory={os.getcwd()}', f'--setenv=QUESTS_INSTANCE={ENV["QUESTS_INSTANCE"]}', os.path.join(HERE, 'quests-listen-run'), lid], check=True)
+body = os.path.join(HERE, 'quests-listen-run')
+if SYSTEMD:
+    subprocess.run(['systemd-run', '--user', '--collect', '--quiet', '--unit', unit, f'--description=quests listener {name}',
+                    f'--working-directory={os.getcwd()}', f'--setenv=QUESTS_INSTANCE={ENV["QUESTS_INSTANCE"]}', body, lid], check=True)
+else:
+    env = {**os.environ, 'QUESTS_INSTANCE': ENV['QUESTS_INSTANCE']}
+    io = dict(stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env, cwd=os.getcwd())
+    if sys.platform == 'win32':
+        # A hidden console of its own, outside the chat's job object, so the chat's process ending does not end it.
+        flags = subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+        try:
+            p = subprocess.Popen([sys.executable, body, lid], creationflags=flags | subprocess.CREATE_BREAKAWAY_FROM_JOB, **io)
+        except OSError:  # a job that forbids breaking away
+            p = subprocess.Popen([sys.executable, body, lid], creationflags=flags, **io)
+    else:
+        p = subprocess.Popen([sys.executable, body, lid], start_new_session=True, **io)
+    os.makedirs(PIDS, exist_ok=True)
+    open(os.path.join(PIDS, f'{unit}.pid'), 'w').write(str(p.pid))
 print(f'listener {lid} started as {unit}; log {log}')

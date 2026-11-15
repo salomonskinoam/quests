@@ -13,7 +13,9 @@ const pkg = createRequire(import.meta.url)('./package.json')
 // quests: our version on top of the original project's: the number of our commits not in upstream/main
 // (remote "upstream" = siteboon/claudecodeui, added by scripts/quests-update.sh), plus the commit.
 const git = (args) => execSync(`git ${args}`, { cwd: fileURLToPath(new URL('.', import.meta.url)) }).toString().trim()
-const questsVersion = `${git('rev-list --count upstream/main..HEAD')} (${git('rev-parse --short HEAD')})`
+// Without that remote there is no count, only the commit.
+const ahead = (() => { try { return `${git('rev-list --count upstream/main..HEAD')} ` } catch { return '' } })()
+const questsVersion = `${ahead}(${git('rev-parse --short HEAD')})`
 
 export default defineConfig(({ mode }) => {
   // Load env file based on `mode` in the current working directory.
