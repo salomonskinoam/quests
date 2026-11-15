@@ -153,3 +153,5 @@ server/**/tests/read-only-roots-fixture-*/
 server/**/tests/file-tree-outside-*/
 
 __pycache__/
+*.db-shm
+*.db-wal
